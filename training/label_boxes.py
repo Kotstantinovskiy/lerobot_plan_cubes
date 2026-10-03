@@ -24,7 +24,6 @@ import cube_boxes  # noqa: E402
 from project_config import PROJECT, load_config  # noqa: E402
 
 DRAW_BGR = {"red": (0, 0, 255), "blue": (255, 0, 0), "green": (0, 200, 0), "yellow": (0, 220, 255)}
-TWO_CUBES_SIDE = 70  # pixels; a cube's box is ~35-50 wide, or up to ~65 when it is turned by 45 degrees
 CLEARLY_MOVED = 40  # pixels; a cube closer than this to a box of its colour at the end may just have been covered
 DETECTION_MARGIN = 3  # pixels between a cube and its coloured box on the contact sheet
 DETECTION_THICKNESS = 2
@@ -72,11 +71,11 @@ def find_moved_box(start_boxes: list[list[int]], end_boxes: list[list[int]]) -> 
     """
     if len(start_boxes) == 1:
         only = start_boxes[0]
-        is_two_cubes = max(only[2] - only[0], only[3] - only[1]) > TWO_CUBES_SIDE
+        is_two_cubes = max(only[2] - only[0], only[3] - only[1]) > cube_boxes.TWO_CUBES_SIDE
         if not is_two_cubes:
             return only, True
         stayed = min(end_boxes, key=lambda box: distance_to_nearest(box, [only]), default=None)
-        if stayed is None or distance_to_nearest(stayed, [only]) > TWO_CUBES_SIDE:
+        if stayed is None or distance_to_nearest(stayed, [only]) > cube_boxes.TWO_CUBES_SIDE:
             return only, False
         return split_two_cubes(only, stayed), True
     moved_distances = [distance_to_nearest(box, end_boxes) for box in start_boxes]

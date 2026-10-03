@@ -56,6 +56,7 @@ def make_args(**overrides) -> argparse.Namespace:
         "full_finetune": False,
         "wandb": False,
         "gpu": None,
+        "precision": "bf16",
         "resume": False,
         "run_name": RUN_NAME,
         "extra": [],
@@ -182,9 +183,14 @@ class BuildCommandTests(unittest.TestCase):
             "--num_processes=2",
             "--num_machines=1",
             "--dynamo_backend=no",
+            "--mixed_precision=bf16",
             TRAINER_SCRIPT,
         ]
-        self.assertEqual(command[:8], expected_start)
+        self.assertEqual(command[:9], expected_start)
+
+    def test_several_gpus_without_autocast_tell_accelerate_so(self):
+        command, _ = train.build_command(make_args(gpu="0,3", precision="fp32"), CONFIG, "smolvla")
+        self.assertIn("--mixed_precision=no", command)
 
     def test_one_gpu_runs_the_script_directly(self):
         command, _ = train.build_command(make_args(gpu="3"), CONFIG, "smolvla")

@@ -69,6 +69,10 @@ class FindMovedBoxTests(unittest.TestCase):
     def test_single_cube_is_the_target(self):
         self.assertEqual(find_moved_box([CUBE_ON_TABLE], [ON_CORK]), (CUBE_ON_TABLE, True))
 
+    def test_largest_single_cube_is_not_taken_for_two(self):
+        largest_cube = [500, 450, 572, 505]  # 72 pixels: the most one cube reached on 94 frames (cube_boxes.py)
+        self.assertEqual(find_moved_box([largest_cube], [ON_CORK]), (largest_cube, True))
+
     def test_single_cube_that_stayed_is_still_the_target(self):
         self.assertEqual(find_moved_box([CUBE_ON_TABLE], [CUBE_ON_TABLE]), (CUBE_ON_TABLE, True))
 

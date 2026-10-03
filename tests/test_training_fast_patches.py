@@ -20,6 +20,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.scripts import lerobot_train
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "training"))
+import train  # noqa: E402
 
 TOP_CAMERA = "observation.images.top"
 WRIST_CAMERA = "observation.images.wrist"
@@ -204,9 +205,18 @@ class SaveCheckpointTests(unittest.TestCase):
         self.save_newest()
         self.assertTrue((self.newest / "training_state").is_dir())
 
-    def test_plain_run_adds_no_settings(self):
+    def test_plain_run_adds_only_the_precision(self):
         self.save_newest()
-        self.assertEqual(list((self.newest / "pretrained_model").iterdir()), [])
+        added = [path.name for path in (self.newest / "pretrained_model").iterdir()]
+        self.assertEqual(added, [fast_trainer.PRECISION_FILE])
+
+    def test_checkpoint_says_which_precision_trained_it(self):
+        with patch.object(fast_trainer, "PRECISION", "fp32"):
+            self.save_newest()
+        self.assertEqual((self.newest / "pretrained_model" / "train_precision.txt").read_text(), "fp32")
+
+    def test_train_py_reads_the_file_this_script_writes(self):
+        self.assertEqual(fast_trainer.PRECISION_FILE, train.PRECISION_FILE)
 
     def test_box_run_saves_the_drawing_style(self):
         self.save_newest(target_box=True)

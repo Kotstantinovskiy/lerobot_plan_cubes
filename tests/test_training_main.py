@@ -4,6 +4,7 @@ Runs on the fake project of test_training_command.py: nothing is started, and ne
 """
 
 import argparse
+import os
 import shlex
 import sys
 import unittest
@@ -85,6 +86,55 @@ class ResumeTests(MainTestCase):
         (self.meta / "info.json").unlink()
         exit_code, _, _ = self.run_main("--resume")
         self.assertEqual(exit_code, 0)
+
+    def test_resume_keeps_the_precision_of_the_checkpoint(self):
+        (self.saved_model / train.PRECISION_FILE).write_text("fp32")
+        self.run_main("--resume")
+        self.assertEqual(self.launched_env()["ACCELERATE_MIXED_PRECISION"], "no")
+
+    def test_precision_flag_overrides_the_checkpoint(self):
+        (self.saved_model / train.PRECISION_FILE).write_text("fp32")
+        self.run_main("--resume", "--precision", "bf16")
+        self.assertEqual(self.launched_env()["ACCELERATE_MIXED_PRECISION"], "bf16")
+
+    def test_older_checkpoint_gets_the_default_precision(self):
+        self.run_main("--resume")
+        self.assertEqual(self.launched_env()["ACCELERATE_MIXED_PRECISION"], "bf16")
+
+    def test_older_checkpoint_says_which_precision_it_got(self):
+        _, stdout, _ = self.run_main("--resume")
+        self.assertIn("не хранит точность обучения: продолжаю с bf16", stdout)
+
+    def test_resume_on_several_gpus_tells_accelerate_the_precision_of_the_checkpoint(self):
+        (self.saved_model / train.PRECISION_FILE).write_text("fp32")
+        self.run_main("--resume", "--gpu", "0,3")
+        self.assertIn("--mixed_precision=no", self.trainer_call.call_args.args[0])
+
+
+class NewRunPrecisionTests(MainTestCase):
+    def test_new_run_defaults_to_bf16(self):
+        self.run_smolvla()
+        self.assertEqual(self.launched_env()["ACCELERATE_MIXED_PRECISION"], "bf16")
+
+    def test_new_run_on_several_gpus_tells_accelerate_bf16(self):
+        self.run_smolvla("--gpu", "0,3")
+        self.assertIn("--mixed_precision=bf16", self.trainer_call.call_args.args[0])
+
+    def test_new_run_says_nothing_about_a_checkpoint(self):
+        _, stdout, _ = self.run_smolvla()
+        self.assertNotIn("не хранит точность", stdout)
+
+
+class RelativePolicyTests(MainTestCase):
+    def test_relative_policy_path_reaches_the_trainer_as_absolute(self):
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.project)
+        self.run_main("--policy", "smolvla")
+        self.assertIn(f"--policy.path={self.smolvla_folder}", self.trainer_call.call_args.args[0])
+
+    def test_absolute_policy_path_stays_as_it_is(self):
+        self.run_smolvla()
+        self.assertIn(f"--policy.path={self.smolvla_folder}", self.trainer_call.call_args.args[0])
 
 
 class RefusalTests(MainTestCase):

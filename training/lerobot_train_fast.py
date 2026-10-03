@@ -57,6 +57,8 @@ SAMPLER_EPOCHS = 100_000  # more than any run gets through, so the sampler never
 # run_policy.py and eval_offline.py look for these next to the weights of a checkpoint.
 TARGET_BOX_FILE = "target_box.json"
 TOP_CROP_FILE = "top_crop.json"
+PRECISION_FILE = "train_precision.txt"  # what train.py --resume reads to continue with the same --precision
+PRECISION = "bf16" if os.environ.get("ACCELERATE_MIXED_PRECISION") == "bf16" else "fp32"
 original_getitem = LeRobotDataset.__getitem__
 original_query_videos = LeRobotDataset._query_videos
 original_save_checkpoint = lerobot_train.save_checkpoint
@@ -111,13 +113,14 @@ def query_videos(self, query_timestamps, ep_idx):
 
 # lerobot_train calls the next three by keyword, so their parameter names must stay those of LeRobot's functions.
 def save_checkpoint(checkpoint_dir, *args, **kwargs):
-    """LeRobot's save_checkpoint, then the box and crop settings are added and older optimizer states deleted."""
+    """LeRobot's save_checkpoint, then the box, crop and precision are added and older optimizer states deleted."""
     original_save_checkpoint(checkpoint_dir, *args, **kwargs)
     # Only the newest checkpoint keeps its optimizer state (25 GB for pi0.5): --resume continues from the last one.
     for state_dir in Path(checkpoint_dir).parent.glob("*/training_state"):
         if state_dir.parent != Path(checkpoint_dir):
             shutil.rmtree(state_dir)
     model_dir = Path(checkpoint_dir) / "pretrained_model"
+    (model_dir / PRECISION_FILE).write_text(PRECISION)
     if TARGET_BOX:
         (model_dir / TARGET_BOX_FILE).write_text(json.dumps(cube_boxes.STYLE, indent=1))
     if TOP_CROP:

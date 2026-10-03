@@ -72,6 +72,9 @@ MAX_NUM_WORKERS = 64
 # lerobot_train_fast.py leaves these in a checkpoint trained with boxes or the crop.
 TARGET_BOX_FILE = "target_box.json"
 TOP_CROP_FILE = "top_crop.json"
+# And this in every checkpoint: the --precision it was trained with.
+PRECISION_FILE = "train_precision.txt"
+DEFAULT_PRECISION = "bf16"
 ERROR_EXIT_CODE = 2
 
 
@@ -94,7 +97,8 @@ def encode_option(value) -> str:
 def find_policy_folder(policy: str) -> Path:
     """A pretrained_model folder: the given one, or a Hub id downloaded at its revision from REVISIONS."""
     if Path(policy).is_dir():
-        return Path(policy)
+        # Absolute: the trainer runs from the project root, which may not be where this was called from.
+        return Path(policy).resolve()
     from huggingface_hub import snapshot_download
 
     return Path(snapshot_download(policy, revision=REVISIONS.get(policy)))
@@ -152,7 +156,12 @@ def new_run_options(args: argparse.Namespace, config: dict, policy_type: str) ->
     return options
 
 
-def multi_gpu_launcher(gpu: str | None) -> list[str]:
+def autocast_mode(precision: str) -> str:
+    """accelerate's mixed_precision setting for a --precision value."""
+    return "bf16" if precision == "bf16" else "no"
+
+
+def multi_gpu_launcher(gpu: str | None, precision: str) -> list[str]:
     """What goes between the Python interpreter and the script for --gpu; nothing for a single GPU."""
     gpu_count = len(gpu.split(",")) if gpu else 1
     if gpu_count == 1:
@@ -165,14 +174,16 @@ def multi_gpu_launcher(gpu: str | None) -> list[str]:
         f"--num_processes={gpu_count}",
         "--num_machines=1",
         "--dynamo_backend=no",
+        # accelerate launch overwrites ACCELERATE_MIXED_PRECISION in the processes it starts unless it is told this.
+        f"--mixed_precision={autocast_mode(precision)}",
     ]
 
 
 def build_command(args: argparse.Namespace, config: dict, policy_type: str) -> tuple[list[str], Path]:
     """The training command line, as a list of arguments, and the run's output folder.
 
-    `args` is the parsed command line with the policy folder and the policy's DEFAULTS filled in, `config` the project
-    config (repo_id and dataset_root are used), `policy_type` a key of RENAME.
+    `args` is the parsed command line with the policy folder, the policy's DEFAULTS and the precision filled in,
+    `config` the project config (repo_id and dataset_root are used), `policy_type` a key of RENAME.
     """
     if args.resume:
         options = {"config_path": last_checkpoint_model(args.run_name) / "train_config.json", "resume": True}
@@ -180,7 +191,7 @@ def build_command(args: argparse.Namespace, config: dict, policy_type: str) -> t
         options = new_run_options(args, config, policy_type)
     # lerobot_train with faster data loading: frames shrunk to the policy's input size inside the workers (same model
     # inputs) and no worker restarts between epochs.
-    command = [sys.executable, *multi_gpu_launcher(args.gpu), str(TRAINER_SCRIPT)]
+    command = [sys.executable, *multi_gpu_launcher(args.gpu, args.precision), str(TRAINER_SCRIPT)]
     command += [f"--{key}={encode_option(value)}" for key, value in options.items()]
     return command + args.extra, run_folder(args.run_name)
 
@@ -191,7 +202,7 @@ def training_environment(args: argparse.Namespace, policy_type: str) -> dict[str
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     if args.gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = args.gpu
-    env["ACCELERATE_MIXED_PRECISION"] = "bf16" if args.precision == "bf16" else "no"
+    env["ACCELERATE_MIXED_PRECISION"] = autocast_mode(args.precision)
     env["TARGET_BOX"] = "1" if args.target_box else "0"
     env["TOP_CROP"] = "1" if args.top_crop else "0"
     env["POLICY_TYPE"] = policy_type
@@ -203,6 +214,18 @@ def fill_policy_defaults(args: argparse.Namespace, policy_type: str) -> None:
     for name, value in DEFAULTS[policy_type].items():
         if getattr(args, name) is None:
             setattr(args, name, value)
+
+
+def saved_precision(saved_model: Path) -> str:
+    """The --precision a checkpoint was trained with; older checkpoints do not say, so they get the default."""
+    precision_path = saved_model / PRECISION_FILE
+    if precision_path.is_file():
+        return precision_path.read_text().strip()
+    print(
+        f"Чекпойнт не хранит точность обучения: продолжаю с {DEFAULT_PRECISION}, другую можно задать через --precision",
+        flush=True,
+    )
+    return DEFAULT_PRECISION
 
 
 def check_box_labels(meta: Path, episodes: list[int] | None) -> None:
@@ -277,8 +300,8 @@ def add_launch_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--precision",
         choices=["bf16", "fp32"],
-        default="bf16",
-        help="bf16 — autocast при fp32-весах; fp32 — без autocast",
+        help=f"bf16 — autocast при fp32-весах; fp32 — без autocast. По умолчанию {DEFAULT_PRECISION}, "
+        "а при --resume та же, что у чекпойнта",
     )
     parser.add_argument("--gpu", help="Номер GPU (CUDA_VISIBLE_DEVICES), например 0, или несколько: 0,3")
     parser.add_argument("--wandb", action="store_true", help="Логировать в Weights & Biases")
@@ -302,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_training(args: argparse.Namespace) -> int:
     """Check the setup and run the trainer, or only show its command with --dry-run; gives the exit code to report.
 
-    Fills `args` in place: the policy folder, the policy's defaults, and the box and crop a checkpoint was trained with.
+    Fills `args` in place: the policy folder, the policy's defaults, and the box, crop and precision of a checkpoint.
     """
     config = load_config(args.config)
     if args.dataset:
@@ -314,6 +337,8 @@ def run_training(args: argparse.Namespace) -> int:
         args.policy = find_policy_folder(args.policy)
     policy_type = read_policy_type(saved_model if args.resume else args.policy)
     fill_policy_defaults(args, policy_type)
+    if args.precision is None:
+        args.precision = saved_precision(saved_model) if args.resume else DEFAULT_PRECISION
     command, output_dir = build_command(args, config, policy_type)
     print(f"Датасет: {config['dataset_root']}\nЗапуск: {output_dir}", flush=True)
     if args.dry_run:
