@@ -14,9 +14,13 @@ right of the table's middle (about 59% of its width), and left of the camera's c
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    import torch  # only crop_chw meets a tensor; the pyramid scripts run without loading torch
 
 CROP = {
     "camera": "observation.images.top",
@@ -25,26 +29,32 @@ CROP = {
 }
 OUTLINE_BGR_OR_RGB = (128, 128, 128)  # grey reads the same in either channel order
 OUTLINE_THICKNESS = 2
+CROP_FILE = "top_crop.json"
 
 # OpenCV's thread pool can hang in forked data loader workers, and 64 workers with a pool each would oversubscribe.
 cv2.setNumThreads(1)
 
 
-def load(policy_path):
+def load(policy_path: str | Path) -> dict | None:
     """The crop a policy was trained with, else None."""
-    path = Path(policy_path) / "top_crop.json"
+    path = Path(policy_path) / CROP_FILE
     return json.loads(path.read_text()) if path.is_file() else None
 
 
-def straighten(frame, crop=CROP):
+def straighten(frame: np.ndarray, crop: dict = CROP) -> np.ndarray:
     """The quad of an HxWxC frame as a new array of size["height"] x size["width"] x C, same data type."""
     width, height = crop["size"]
     view_corners = np.float32([[0, 0], [width, 0], [width, height], [0, height]])
     matrix = cv2.getPerspectiveTransform(np.float32(crop["quad"]), view_corners)
-    return cv2.warpPerspective(frame, matrix, (width, height), flags=cv2.INTER_LINEAR)
+    return cv2.warpPerspective(
+        frame,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+    )
 
 
-def crop_hwc(image, crop=CROP):
+def crop_hwc(image: np.ndarray, crop: dict = CROP) -> np.ndarray:
     """The view of an HxWx3 frame (camera or video frame)."""
     if "box" in crop:
         x0, y0, x1, y1 = crop["box"]
@@ -52,7 +62,7 @@ def crop_hwc(image, crop=CROP):
     return straighten(image, crop)
 
 
-def crop_chw(image, crop=CROP):
+def crop_chw(image: "torch.Tensor", crop: dict = CROP) -> "torch.Tensor":
     """The view of a ...x3xHxW tensor (LeRobot dataset format, with or without a batch dimension)."""
     if "box" in crop:
         x0, y0, x1, y1 = crop["box"]
@@ -62,10 +72,22 @@ def crop_chw(image, crop=CROP):
     return image.new_tensor(views).reshape(*image.shape[:-3], *views.shape[1:])
 
 
-def draw_outline(image, crop=CROP):
+def draw_outline(image: np.ndarray, crop: dict = CROP) -> None:
     """Draw the cropped area on an HxWx3 frame in place, for the videos of policy runs."""
     if "box" in crop:
         x0, y0, x1, y1 = crop["box"]
-        cv2.rectangle(image, (x0, y0), (x1 - 1, y1 - 1), OUTLINE_BGR_OR_RGB, OUTLINE_THICKNESS)
+        cv2.rectangle(
+            image,
+            (x0, y0),
+            (x1 - 1, y1 - 1),
+            OUTLINE_BGR_OR_RGB,
+            OUTLINE_THICKNESS,
+        )
         return
-    cv2.polylines(image, [np.int32(crop["quad"])], True, OUTLINE_BGR_OR_RGB, OUTLINE_THICKNESS)
+    cv2.polylines(
+        image,
+        [np.int32(crop["quad"])],
+        isClosed=True,
+        color=OUTLINE_BGR_OR_RGB,
+        thickness=OUTLINE_THICKNESS,
+    )

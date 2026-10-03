@@ -1,17 +1,25 @@
-"""The choice of the target cube in training/label_boxes.py, without a dataset. Needs LeRobot, which the script uses."""
+"""Labelling in training/label_boxes.py: the target cube, the contact sheet. Needs LeRobot, as the script does."""
 
-from pathlib import Path
 import sys
+import types
 import unittest
+from pathlib import Path
 
 import numpy as np
+import torch
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "training"))
 sys.path.insert(0, str(PROJECT / "inference"))
 
 import cube_boxes  # noqa: E402
-from label_boxes import find_moved_box, split_two_cubes  # noqa: E402
+from label_boxes import (  # noqa: E402
+    find_moved_box,
+    label_episode,
+    make_contact_sheet,
+    make_tile,
+    split_two_cubes,
+)
 
 CUBE_ON_TABLE = [500, 450, 545, 495]
 TWIN_ON_TABLE = [700, 400, 745, 445]
@@ -22,14 +30,39 @@ TWO_TOUCHING = [500, 450, 580, 490]
 LEFT_CUBE_OF_TOUCHING = [500, 450, 540, 490]
 RIGHT_CUBE_OF_TOUCHING = [540, 450, 580, 490]
 CUBE_RGB = {"red": (230, 30, 30), "blue": (30, 30, 230), "green": (30, 200, 30), "yellow": (230, 220, 30)}
+FRAME_SHAPE = (720, 1280, 3)
+GREY = 128
+OTHER_CUBES = [("blue", [800, 350, 845, 395]), ("green", [900, 450, 945, 495]), ("yellow", [1000, 350, 1045, 395])]
+RED_TASK = "pick the red cube"
+COLOR_OF_TASK = {RED_TASK: "red"}
+CAMERA = cube_boxes.STYLE["camera"]
+LAST_FRAME = 59
 
 
 def make_frame(cubes):
     """A grey 1280x720 RGB frame with a filled box for each (colour, box)."""
-    frame = np.full((720, 1280, 3), 128, np.uint8)
+    frame = np.full(FRAME_SHAPE, GREY, np.uint8)
     for color, (x0, y0, x1, y1) in cubes:
         frame[y0:y1, x0:x1] = CUBE_RGB[color]
     return frame
+
+
+class RedTaskEpisode:
+    """A dataset of one episode with the red task; `scenes` is {first frame of a scene: its (colour, box) cubes}."""
+
+    def __init__(self, scenes):
+        self.scenes = scenes
+        episode = {"dataset_from_index": 0, "length": LAST_FRAME + 1}
+        self.meta = types.SimpleNamespace(episodes=[episode])
+
+    def __getitem__(self, index):
+        latest_start = max(start for start in self.scenes if start <= index)
+        frame = torch.from_numpy(make_frame(self.scenes[latest_start])).permute(2, 0, 1).float() / 255
+        return {CAMERA: frame, "task": RED_TASK}
+
+
+def label_red_episode(scenes):
+    return label_episode(RedTaskEpisode(scenes), 0, CAMERA, COLOR_OF_TASK, [0, 10, 20])
 
 
 class FindMovedBoxTests(unittest.TestCase):
@@ -87,6 +120,83 @@ class DetectAllTests(unittest.TestCase):
 
     def test_detect_gives_none_for_an_absent_colour(self):
         self.assertIsNone(cube_boxes.detect(make_frame([("red", CUBE_ON_TABLE)]))["blue"])
+
+
+class LabelEpisodeTests(unittest.TestCase):
+    def test_entry_holds_the_target_the_frame_and_all_boxes(self):
+        entry, _, _ = label_red_episode({0: [("red", CUBE_ON_TABLE), *OTHER_CUBES]})
+        expected_boxes = {"red": CUBE_ON_TABLE, **dict(OTHER_CUBES)}
+        self.assertEqual(entry, {"target": "red", "frame": 0, "boxes": expected_boxes})
+
+    def test_complete_detection_reports_nothing(self):
+        _, problems, _ = label_red_episode({0: [("red", CUBE_ON_TABLE), *OTHER_CUBES]})
+        self.assertEqual(problems, [])
+
+    def test_hidden_target_is_taken_from_the_first_offset_that_shows_it(self):
+        entry, _, _ = label_red_episode({0: OTHER_CUBES, 10: [("red", CUBE_ON_TABLE), *OTHER_CUBES]})
+        self.assertEqual((entry["frame"], entry["boxes"]["red"]), (10, CUBE_ON_TABLE))
+
+    def test_image_is_the_frame_the_boxes_come_from(self):
+        _, _, image = label_red_episode({0: OTHER_CUBES, 10: [("red", CUBE_ON_TABLE), *OTHER_CUBES]})
+        np.testing.assert_array_equal(image, make_frame([("red", CUBE_ON_TABLE), *OTHER_CUBES]))
+
+    def test_target_never_seen_is_reported(self):
+        entry, problems, _ = label_red_episode({0: OTHER_CUBES})
+        self.assertEqual((entry["frame"], entry["boxes"]["red"]), (20, None))
+        self.assertEqual(problems, ["эпизод 0: нет целевого red"])
+
+    def test_missing_cube_of_another_colour_is_reported(self):
+        _, problems, _ = label_red_episode({0: [("red", CUBE_ON_TABLE), *OTHER_CUBES[:2]]})
+        self.assertEqual(problems, ["эпизод 0: не найдены yellow (цель red есть, кадр 0)"])
+
+    def test_two_twins_gone_at_the_end_are_reported_as_uncertain(self):
+        scenes = {
+            0: [("red", CUBE_ON_TABLE), ("red", TWIN_ON_TABLE), *OTHER_CUBES],
+            LAST_FRAME: [("red", ON_CORK), *OTHER_CUBES],
+        }
+        _, problems, _ = label_red_episode(scenes)
+        self.assertEqual(problems, [f"эпизод 0: не ясно, какой red сдвинулся, взят {CUBE_ON_TABLE}: проверь глазами"])
+
+
+class MakeTileTests(unittest.TestCase):
+    table_x0, table_y0, table_x1, table_y1 = cube_boxes.TABLE
+
+    def make_tile_of_red_cube(self):
+        entry = {"target": "red", "frame": 0, "boxes": {"red": CUBE_ON_TABLE, "blue": None}}
+        return make_tile(0, entry, make_frame([("red", CUBE_ON_TABLE)]))
+
+    def test_tile_shows_the_table_area_at_half_size(self):
+        table_height, table_width = self.table_y1 - self.table_y0, self.table_x1 - self.table_x0
+        self.assertEqual(self.make_tile_of_red_cube().shape, (table_height // 2, table_width // 2, 3))
+
+    def test_target_is_marked_with_the_white_box(self):
+        band_y = CUBE_ON_TABLE[1] - cube_boxes.STYLE["margin"] + cube_boxes.STYLE["thickness"] // 2
+        band_x = (CUBE_ON_TABLE[0] + CUBE_ON_TABLE[2]) // 2
+        tile_pixel = self.make_tile_of_red_cube()[(band_y - self.table_y0) // 2, (band_x - self.table_x0) // 2]
+        self.assertEqual(tile_pixel.tolist(), [255, 255, 255])
+
+    def test_cube_keeps_its_colour_in_bgr(self):
+        center_x, center_y = (CUBE_ON_TABLE[0] + CUBE_ON_TABLE[2]) // 2, (CUBE_ON_TABLE[1] + CUBE_ON_TABLE[3]) // 2
+        tile_pixel = self.make_tile_of_red_cube()[(center_y - self.table_y0) // 2, (center_x - self.table_x0) // 2]
+        self.assertEqual(tile_pixel.tolist(), list(reversed(CUBE_RGB["red"])))
+
+
+class ContactSheetTests(unittest.TestCase):
+    tile = np.full((2, 3, 3), 255, np.uint8)
+
+    def test_full_rows_get_no_padding(self):
+        self.assertEqual(make_contact_sheet([self.tile] * 10).shape, (4, 15, 3))
+
+    def test_last_row_is_filled_up_to_the_full_width(self):
+        self.assertEqual(make_contact_sheet([self.tile] * 6).shape, (4, 15, 3))
+
+    def test_filled_up_tiles_are_black(self):
+        sheet = make_contact_sheet([self.tile] * 6)
+        self.assertEqual(sheet[2:, 3:].sum(), 0)
+
+    def test_given_tiles_keep_their_place(self):
+        sheet = make_contact_sheet([self.tile] * 6)
+        np.testing.assert_array_equal(sheet[2:, :3], self.tile)
 
 
 if __name__ == "__main__":

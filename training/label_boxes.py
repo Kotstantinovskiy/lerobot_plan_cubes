@@ -11,24 +11,34 @@ visual check: coloured boxes are detections, the white one is the target.
 import argparse
 import json
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
-
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 import cube_boxes  # noqa: E402
-from run_policy import PROJECT, load_config  # noqa: E402
+from project_config import PROJECT, load_config  # noqa: E402
 
 DRAW_BGR = {"red": (0, 0, 255), "blue": (255, 0, 0), "green": (0, 200, 0), "yellow": (0, 220, 255)}
 TWO_CUBES_SIDE = 70  # pixels; a cube's box is ~35-50 wide, or up to ~65 when it is turned by 45 degrees
 CLEARLY_MOVED = 40  # pixels; a cube closer than this to a box of its colour at the end may just have been covered
+DETECTION_MARGIN = 3  # pixels between a cube and its coloured box on the contact sheet
+DETECTION_THICKNESS = 2
+TILE_SHRINK = 2  # a tile of the sheet shows the table area at half size
+CAPTION_ORIGIN = (8, 26)
+CAPTION_SCALE = 0.8
+CAPTION_THICKNESS = 2
+CAPTION_BGR = (255, 255, 255)
+SHEET_COLUMNS = 5
+SHEET_JPEG_QUALITY = 85
 
 
 def box_center(box: list[int]) -> tuple[float, float]:
+    """The (x, y) centre of an (x0, y0, x1, y1) box, in pixels."""
     return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
 
 
@@ -71,18 +81,25 @@ def find_moved_box(start_boxes: list[list[int]], end_boxes: list[list[int]]) -> 
         return split_two_cubes(only, stayed), True
     moved_distances = [distance_to_nearest(box, end_boxes) for box in start_boxes]
     clearly_moved_count = sum(distance > CLEARLY_MOVED for distance in moved_distances)
-    farthest = max(range(len(start_boxes)), key=moved_distances.__getitem__)
+    farthest = moved_distances.index(max(moved_distances))
     return start_boxes[farthest], clearly_moved_count == 1
 
 
-def frame_rgb(dataset, index: int, camera: str):
+def frame_rgb(dataset, index: int, camera: str) -> np.ndarray:
+    """A dataset frame of `camera` as an HxWx3 uint8 RGB image."""
     return (dataset[index][camera].permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
 
 
-def label_episode(dataset, ep: int, camera: str, color_of_task: dict[str, str], offsets: list[int]):
+def label_episode(
+    dataset,
+    episode: int,
+    camera: str,
+    color_of_task: dict[str, str],
+    offsets: list[int],
+) -> tuple[dict, list[str], np.ndarray]:
     """The episode's entry for cube_boxes.json, what to report about it, and the frame its boxes come from."""
-    start = int(dataset.meta.episodes[ep]["dataset_from_index"])
-    length = int(dataset.meta.episodes[ep]["length"])
+    start = int(dataset.meta.episodes[episode]["dataset_from_index"])
+    length = int(dataset.meta.episodes[episode]["length"])
     problems = []
     for offset in offsets:
         index = start + min(offset, length - 1)
@@ -94,68 +111,92 @@ def label_episode(dataset, ep: int, camera: str, color_of_task: dict[str, str], 
 
     boxes = {color: (found[color][0] if found[color] else None) for color in found}
     if not found[target]:
-        problems.append(f"эпизод {ep}: нет целевого {target}")
+        problems.append(f"эпизод {episode}: нет целевого {target}")
     else:
         end_boxes = cube_boxes.detect_all(frame_rgb(dataset, start + length - 1, camera))[target]
         boxes[target], is_certain = find_moved_box(found[target], end_boxes)
         if not is_certain:
-            problems.append(f"эпизод {ep}: не ясно, какой {target} сдвинулся, взят {boxes[target]}: проверь глазами")
+            problems.append(
+                f"эпизод {episode}: не ясно, какой {target} сдвинулся, взят {boxes[target]}: проверь глазами"
+            )
     missing = [color for color, box in boxes.items() if box is None]
     if boxes[target] is not None and missing:
-        problems.append(f"эпизод {ep}: не найдены {', '.join(missing)} (цель {target} есть, кадр {offset})")
+        problems.append(f"эпизод {episode}: не найдены {', '.join(missing)} (цель {target} есть, кадр {offset})")
     return {"target": target, "frame": offset, "boxes": boxes}, problems, image
 
 
-def make_tile(ep: int, entry: dict, image):
-    """A piece of the contact sheet: the table area with the episode's boxes."""
+def make_tile(episode: int, entry: dict, image: np.ndarray) -> np.ndarray:
+    """A piece of the contact sheet: the table area with the episode's boxes, as a BGR image.
+
+    `entry` is the episode's entry of cube_boxes.json, `image` the HxWx3 RGB frame its boxes come from.
+    """
     target, offset, boxes = entry["target"], entry["frame"], entry["boxes"]
     bgr = np.ascontiguousarray(image[:, :, ::-1])
     for color, box in boxes.items():
         if box is not None:
-            cv2.rectangle(bgr, (box[0] - 3, box[1] - 3), (box[2] + 3, box[3] + 3), DRAW_BGR[color], 2)
+            top_left = (box[0] - DETECTION_MARGIN, box[1] - DETECTION_MARGIN)
+            bottom_right = (box[2] + DETECTION_MARGIN, box[3] + DETECTION_MARGIN)
+            cv2.rectangle(bgr, top_left, bottom_right, DRAW_BGR[color], DETECTION_THICKNESS)
     if boxes[target] is not None:
         bgr = np.ascontiguousarray(cube_boxes.draw_rgb(bgr[:, :, ::-1].copy(), boxes[target])[:, :, ::-1])
     x0, y0, x1, y1 = cube_boxes.TABLE
-    tile = cv2.resize(bgr[y0:y1, x0:x1], ((x1 - x0) // 2, (y1 - y0) // 2))
-    cv2.putText(tile, f"{ep} {target}" + (f" f{offset}" if offset else ""), (8, 26), 0, 0.8, (255, 255, 255), 2)
+    tile = cv2.resize(bgr[y0:y1, x0:x1], ((x1 - x0) // TILE_SHRINK, (y1 - y0) // TILE_SHRINK))
+    caption = f"{episode} {target}" + (f" f{offset}" if offset else "")
+    cv2.putText(tile, caption, CAPTION_ORIGIN, cv2.FONT_HERSHEY_SIMPLEX, CAPTION_SCALE, CAPTION_BGR, CAPTION_THICKNESS)
     return tile
 
 
-def main():
+def make_contact_sheet(tiles: list[np.ndarray]) -> np.ndarray:
+    """Same-sized tiles in rows of SHEET_COLUMNS, with black tiles filling up the last row."""
+    padding_count = -len(tiles) % SHEET_COLUMNS
+    padded = tiles + [np.zeros_like(tiles[0])] * padding_count
+    rows = [np.hstack(padded[i : i + SHEET_COLUMNS]) for i in range(0, len(padded), SHEET_COLUMNS)]
+    return np.vstack(rows)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, default=PROJECT / "config.json")
     parser.add_argument("--dataset", type=Path, help="Папка датасета вместо dataset_root из конфига")
-    parser.add_argument("--offsets", default="0,10,20,40", help="Кадры от начала эпизода, по очереди, пока цель не найдена")
-    parser.add_argument("--sheet", type=Path, help="Куда сохранить лист с рамками (по умолчанию outputs/boxes/<датасет>.jpg)")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--offsets", default="0,10,20,40", help="Кадры от начала эпизода, по очереди, пока цель не найдена"
+    )
+    parser.add_argument(
+        "--sheet", type=Path, help="Куда сохранить лист с рамками (по умолчанию outputs/boxes/<датасет>.jpg)"
+    )
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     config = load_config(args.config)
     root = Path(args.dataset.expanduser().resolve() if args.dataset else config["dataset_root"])
     color_of_task = {task: color for color, task in config["tasks"].items()}
     dataset = LeRobotDataset(config["repo_id"], root=root, video_backend="pyav")
-    offsets = [int(x) for x in args.offsets.split(",")]
+    offsets = [int(offset) for offset in args.offsets.split(",")]
     camera = cube_boxes.STYLE["camera"]
 
     episodes, tiles, problems = {}, [], []
-    for ep in range(dataset.meta.total_episodes):
-        entry, episode_problems, image = label_episode(dataset, ep, camera, color_of_task, offsets)
-        episodes[str(ep)] = entry
+    for episode in range(dataset.meta.total_episodes):
+        entry, episode_problems, image = label_episode(dataset, episode, camera, color_of_task, offsets)
+        episodes[str(episode)] = entry
         problems += episode_problems
-        tiles.append(make_tile(ep, entry, image))
+        tiles.append(make_tile(episode, entry, image))
 
-    out = root / "meta" / "cube_boxes.json"
-    out.write_text(json.dumps({"camera": camera, "episodes": episodes}, indent=1))
-    columns = 5
-    tiles += [np.zeros_like(tiles[0])] * (-len(tiles) % columns)
-    sheet = np.vstack([np.hstack(tiles[i:i + columns]) for i in range(0, len(tiles), columns)])
+    labels_path = root / "meta" / "cube_boxes.json"
+    labels_path.write_text(json.dumps({"camera": camera, "episodes": episodes}, indent=1))
+    sheet = make_contact_sheet(tiles)
     sheet_path = args.sheet or PROJECT / "outputs" / "boxes" / f"{root.name}.jpg"
     sheet_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(sheet_path), sheet, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    found = sum(e["boxes"][e["target"]] is not None for e in episodes.values())
-    print(f"Цель найдена в {found} из {len(episodes)} эпизодов. Рамки: {out}\nЛист для проверки: {sheet_path}")
+    cv2.imwrite(str(sheet_path), sheet, [cv2.IMWRITE_JPEG_QUALITY, SHEET_JPEG_QUALITY])
+
+    found_count = sum(entry["boxes"][entry["target"]] is not None for entry in episodes.values())
+    print(f"Цель найдена в {found_count} из {len(episodes)} эпизодов. Рамки: {labels_path}")
+    print(f"Лист для проверки: {sheet_path}")
     for line in problems:
         print("  " + line)
-    return 0 if found == len(episodes) else 1
+    return 0 if found_count == len(episodes) else 1
 
 
 if __name__ == "__main__":

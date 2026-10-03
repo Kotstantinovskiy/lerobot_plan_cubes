@@ -18,38 +18,95 @@ Arguments other than those below go to run_policy.py, e.g.
 import argparse
 import csv
 import json
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from typing import NamedTuple
 
 INFERENCE = Path(__file__).resolve().parent
 PROJECT = INFERENCE.parent
-OUTCOMES = {"p": "placed", "g": "grasped", "m": "missed", "w": "wrong cube"}
+PLACED, GRASPED, MISSED, WRONG_CUBE = "placed", "grasped", "missed", "wrong cube"
+OUTCOMES = {"p": PLACED, "g": GRASPED, "m": MISSED, "w": WRONG_CUBE}
+RUN_AGAIN, STOP = "r", "q"
+RESULTS_FILE = "results.csv"
+OUTPUT_FOLDER = PROJECT / "camera_check"
+TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 PROMPT = "Outcome: p placed, g grasped, m missed, w wrong cube; r run again, q stop: "
 
 
-def tally(rows):
+class ScheduledTrial(NamedTuple):
+    """One planned trial: the cube layout it belongs to (from 1) and the colour commanded."""
+
+    layout: int
+    color: str
+
+
+@dataclass(frozen=True)
+class TrialResult:
+    """One line of results.csv; the fields are its columns, in order."""
+
+    trial: int
+    layout: int
+    color: str
+    outcome: str
+    target_box: list[int] | None
+    seam_median: float | None
+    seam_p90: float | None
+    steps: int
+    video: str
+
+
+def count_outcomes(results: list[TrialResult]) -> str:
+    """Placed, grasped (placed or not) and wrong-cube counts of these trials, as a text."""
+    trial_count = len(results)
+    placed_count = sum(result.outcome == PLACED for result in results)
+    grasped_count = sum(result.outcome in (PLACED, GRASPED) for result in results)
+    wrong_cube_count = sum(result.outcome == WRONG_CUBE for result in results)
+    return (
+        f"placed {placed_count}/{trial_count}, grasped {grasped_count}/{trial_count}, "
+        f"wrong cube {wrong_cube_count}/{trial_count}"
+    )
+
+
+def tally(results: list[TrialResult]) -> str:
     """Placed, grasped (placed or not) and wrong-cube counts over all trials, then per colour."""
-    def counts(subset):
-        def number(*outcomes):
-            return sum(row["outcome"] in outcomes for row in subset)
-
-        n = len(subset)
-        return f"placed {number('placed')}/{n}, grasped {number('placed', 'grasped')}/{n}, " \
-               f"wrong cube {number('wrong cube')}/{n}"
-
-    colors = dict.fromkeys(row["color"] for row in rows)
-    return "\n".join([f"All: {counts(rows)}"]
-                     + [f"  {color}: {counts([row for row in rows if row['color'] == color])}" for color in colors])
+    lines = [f"All: {count_outcomes(results)}"]
+    for color in dict.fromkeys(result.color for result in results):
+        results_of_color = [result for result in results if result.color == color]
+        lines.append(f"  {color}: {count_outcomes(results_of_color)}")
+    return "\n".join(lines)
 
 
-def run_trial(policy, color, summary, run_args):
+def make_schedule(colors: list[str], layout_count: int) -> list[ScheduledTrial]:
+    """Every layout serves each colour once, the order rotating by one colour from one layout to the next."""
+    schedule = []
+    for layout in range(1, layout_count + 1):
+        for i in range(len(colors)):
+            schedule.append(ScheduledTrial(layout, colors[(layout - 1 + i) % len(colors)]))
+    return schedule
+
+
+def run_trial(policy: str, color: str, summary_path: Path, run_args: list[str]) -> dict | None:
     """Runs run_policy.py; its summary, or None if no trial ran (cancelled, or failed before the arm moved)."""
-    summary.unlink(missing_ok=True)
-    child = subprocess.Popen([sys.executable, str(INFERENCE / "run_policy.py"), "--policy", policy, "--color", color,
-                              "--wait", "--summary", str(summary), *run_args], cwd=PROJECT)
+    summary_path.unlink(missing_ok=True)
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            str(INFERENCE / "run_policy.py"),
+            "--policy",
+            policy,
+            "--color",
+            color,
+            "--wait",
+            "--summary",
+            str(summary_path),
+            *run_args,
+        ],
+        cwd=PROJECT,
+    )
     # Ctrl+C reaches the trial too, which folds the arm back; here it is ignored. Only once the trial has started:
     # it would inherit an ignored Ctrl+C.
     previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -57,63 +114,138 @@ def run_trial(policy, color, summary, run_args):
         child.wait()
     finally:
         signal.signal(signal.SIGINT, previous)
-    if not summary.exists():
+    if not summary_path.exists():
         return None
-    result = json.loads(summary.read_text())
-    return result if result["stats"]["steps"] else None
+    summary = json.loads(summary_path.read_text())
+    return summary if summary["stats"]["steps"] else None
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     allow_abbrev=False)  # run_policy.py's --color is not --colors
+def ask_outcome() -> str:
+    """The letter typed after a trial, asked for until it is a valid one."""
+    while True:
+        code = input(PROMPT).strip().lower()
+        if code in (*OUTCOMES, RUN_AGAIN, STOP):
+            return code
+
+
+def make_result(trial: int, scheduled: ScheduledTrial, outcome: str, summary: dict) -> TrialResult:
+    """The results.csv line of a trial, from its typed outcome and the summary run_policy.py wrote."""
+    seams = summary["seams"]
+    return TrialResult(
+        trial=trial,
+        layout=scheduled.layout,
+        color=scheduled.color,
+        outcome=outcome,
+        target_box=summary["target_box"],
+        seam_median=round(seams["median"], 1) if seams else None,
+        seam_p90=round(seams["p90"], 1) if seams else None,
+        steps=summary["stats"]["steps"],
+        video=summary["video"],
+    )
+
+
+def write_results(path: Path, results: list[TrialResult]) -> None:
+    """Rewrite results.csv with all trials so far, so that a series cut short keeps them."""
+    with path.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=[field.name for field in fields(TrialResult)])
+        writer.writeheader()
+        writer.writerows(asdict(result) for result in results)
+
+
+def announce_trial(schedule: list[ScheduledTrial], i: int) -> None:
+    """Print which trial comes next and what to do with the cubes while its policy loads."""
+    scheduled = schedule[i]
+    is_new_layout = i == 0 or schedule[i - 1].layout != scheduled.layout
+    setup = "lay the cubes out anew" if is_new_layout else "put back what the arm moved"
+    print(
+        f"\n=== Trial {i + 1}/{len(schedule)}, layout {scheduled.layout}: {scheduled.color}. "
+        f"While the policy loads, {setup}.",
+        flush=True,
+    )
+
+
+def run_schedule(
+    schedule: list[ScheduledTrial],
+    policy: str,
+    run_args: list[str],
+    folder: Path,
+    results: list[TrialResult],
+) -> None:
+    """Run the trials one by one, asking after each how it went, until they are done or a stop is typed.
+
+    Appends to `results` in place, so that the caller has them if Ctrl+C or the end of the input stops this. Every
+    result also goes to RESULTS_FILE in `folder`, and a tally is printed after it.
+    """
+    i = 0
+    while i < len(schedule):
+        announce_trial(schedule, i)
+        scheduled = schedule[i]
+        summary = run_trial(
+            policy,
+            scheduled.color,
+            folder / f"trial-{i + 1:02d}-{scheduled.color}.json",
+            run_args,
+        )
+        if summary is None:
+            if input("No trial ran. Enter runs it again, q stops: ").strip().lower() == STOP:
+                return
+            continue
+        code = ask_outcome()
+        if code == STOP:
+            return
+        if code == RUN_AGAIN:
+            continue
+        result = make_result(
+            i + 1,
+            scheduled,
+            OUTCOMES[code],
+            summary,
+        )
+        results.append(result)
+        write_results(folder / RESULTS_FILE, results)
+        print(tally(results), flush=True)
+        i += 1
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False
+    )  # run_policy.py's --color is not --colors
     parser.add_argument("--policy", required=True, help="Hub id or local pretrained_model folder")
-    parser.add_argument("--colors", default="red,blue,green,yellow",
-                        help="Comma-separated keys of tasks in config.json")
-    parser.add_argument("--layouts", type=int, default=3, help="Cube layouts; each serves every colour once")
+    parser.add_argument(
+        "--colors", default="red,blue,green,yellow", help="Comma-separated keys of tasks in config.json"
+    )
+    parser.add_argument(
+        "--layouts",
+        type=int,
+        default=3,
+        help="Cube layouts; each serves every colour once",
+    )
     args, run_args = parser.parse_known_args()
+
     colors = args.colors.split(",")
-    schedule = [(layout, colors[(layout - 1 + k) % len(colors)])
-                for layout in range(1, args.layouts + 1) for k in range(len(colors))]
-    out = PROJECT / "camera_check" / f"series-{time.strftime('%Y%m%d-%H%M%S')}"
-    out.mkdir(parents=True)
-    results = out / "results.csv"
-    print(f"{len(schedule)} trials, {args.layouts} layouts x {len(colors)} colours; run_policy.py "
-          f"{' '.join(run_args)}\nResults: {results}", flush=True)
-    rows, i = [], 0
+    schedule = make_schedule(colors, args.layouts)
+    folder = OUTPUT_FOLDER / f"series-{time.strftime(TIMESTAMP_FORMAT)}"
+    folder.mkdir(parents=True)
+    results_path = folder / RESULTS_FILE
+    print(
+        f"{len(schedule)} trials, {args.layouts} layouts x {len(colors)} colours; run_policy.py "
+        f"{' '.join(run_args)}\nResults: {results_path}",
+        flush=True,
+    )
+    results = []
     try:
-        while i < len(schedule):
-            layout, color = schedule[i]
-            new_layout = i == 0 or schedule[i - 1][0] != layout
-            setup = "lay the cubes out anew" if new_layout else "put back what the arm moved"
-            print(f"\n=== Trial {i + 1}/{len(schedule)}, layout {layout}: {color}. While the policy loads, {setup}.",
-                  flush=True)
-            result = run_trial(args.policy, color, out / f"trial-{i + 1:02d}-{color}.json", run_args)
-            if result is None:
-                if input("No trial ran. Enter runs it again, q stops: ").strip().lower() == "q":
-                    break
-                continue
-            while (code := input(PROMPT).strip().lower()) not in (*OUTCOMES, "r", "q"):
-                pass
-            if code == "q":
-                break
-            if code == "r":
-                continue
-            seams = result["seams"]
-            rows.append({"trial": i + 1, "layout": layout, "color": color, "outcome": OUTCOMES[code],
-                         "target_box": result["target_box"],
-                         "seam_median": seams and round(seams["median"], 1),
-                         "seam_p90": seams and round(seams["p90"], 1),
-                         "steps": result["stats"]["steps"], "video": result["video"]})
-            with results.open("w", newline="") as file:
-                writer = csv.DictWriter(file, fieldnames=list(rows[0]))
-                writer.writeheader()
-                writer.writerows(rows)
-            print(tally(rows), flush=True)
-            i += 1
+        run_schedule(
+            schedule,
+            args.policy,
+            run_args,
+            folder,
+            results,
+        )
     except (KeyboardInterrupt, EOFError):
         print("\nSeries stopped.", flush=True)
-    if rows:
-        print(f"\n{tally(rows)}\nResults: {results}", flush=True)
+    if results:
+        print(f"\n{tally(results)}\nResults: {results_path}", flush=True)
 
 
 if __name__ == "__main__":

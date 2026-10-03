@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
 import numpy as np
-
 from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 

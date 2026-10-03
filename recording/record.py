@@ -8,85 +8,90 @@ import argparse
 import importlib.util
 import json
 import os
-from pathlib import Path
 import shlex
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any
 
-PROJECT = Path(__file__).resolve().parents[1]
+from project_config import CONFIG_PATH, PROJECT, load_config, positive_int
+
 TASK_CYCLE = "--task_cycle="  # live_video.py's argument: the colors and their tasks in turn, as JSON [[color, task]]
+LIVE_VIDEO_SCRIPT = PROJECT / "recording" / "live_video.py"
+ARM_SECTIONS = ("robot", "teleop")
+REQUIRED_ARM_SETTINGS = ("type", "port", "id")
+UNSET_MARK = "SET_"  # the values of config.json still to be replaced start like this
+VIDEO_CODEC = "h264"
+SETUP_ERRORS = (OSError, ValueError, KeyError, TypeError)  # reported as one line instead of a traceback
+SETUP_ERROR_EXIT_CODE = 2
 
 
-def load_config(path=PROJECT / "config.json"):
-    """Resolve portable dataset/calibration paths relative to the config file."""
-    path = Path(path).expanduser().resolve()
-    config = json.loads(path.read_text())
-    for section in ("robot", "teleop"):
-        value = config.get(section, {}).get("calibration_dir")
-        if value:
-            directory = Path(value).expanduser()
-            if not directory.is_absolute():
-                directory = path.parent / directory
-            config[section]["calibration_dir"] = str(directory.resolve())
-    root = Path(config["dataset_root"]).expanduser()
-    if not root.is_absolute():
-        root = path.parent / root
-    config["dataset_root"] = str(root.resolve())
-    return config
+def arm_options(config: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the config's robot and teleop sections into LeRobot options such as {"robot.port": "/dev/tty..."}."""
+    options = {}
+    for section in ARM_SECTIONS:
+        for key, value in config[section].items():
+            options[f"{section}.{key}"] = value
+    return options
 
 
-def positive_int(value):
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError("Значение должно быть больше нуля")
-    return number
+def option_arguments(options: dict[str, Any]) -> list[str]:
+    """Turn options into `--key=value` arguments: dicts, lists and booleans as JSON, anything else as text."""
+    arguments = []
+    for key, value in options.items():
+        encoded = json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
+        arguments.append(f"--{key}={encoded}")
+    return arguments
 
 
-def build_command(config, colors, episodes, resume):
+def build_command(config: dict[str, Any], colors: list[str], episodes: int, *, resume: bool) -> tuple[list[str], Path]:
+    """Build the recorder's command for `episodes` episodes of `colors`, taking turns when there are several.
+
+    `config` is what load_config returns. Returns the command and the dataset folder; raises ValueError when a
+    color's task is not a non-empty text.
+    """
     tasks = [config["tasks"][color] for color in colors]
     if not all(isinstance(task, str) and task.strip() for task in tasks):
         raise ValueError("Для цвета нужна непустая текстовая команда")
-    root = Path(config["dataset_root"]).expanduser()
-    if not root.is_absolute():
-        root = PROJECT / root
-    options = {}
-    for section in ("robot", "teleop"):
-        for key, value in config[section].items():
-            options[f"{section}.{key}"] = value
-    options.update({
-        "dataset.repo_id": config["repo_id"],
-        "dataset.root": str(root.resolve()),
-        "dataset.single_task": tasks[0],
-        "dataset.num_episodes": episodes,
-        "dataset.fps": config["fps"],
-        "dataset.episode_time_s": config["episode_time_s"],
-        "dataset.reset_time_s": config["reset_time_s"],
-        "dataset.video": True,
-        "dataset.vcodec": "h264",
-        "dataset.push_to_hub": False,
-        "display_data": config.get("display_data", True),
-        "play_sounds": config.get("play_sounds", False),
-        "resume": resume,
-    })
-    command = [sys.executable, str(PROJECT / "recording" / "live_video.py")]
-    for key, value in options.items():
-        encoded = json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
-        command.append(f"--{key}={encoded}")
+    root = Path(config["dataset_root"]).resolve()
+    options = arm_options(config)
+    options.update(
+        {
+            "dataset.repo_id": config["repo_id"],
+            "dataset.root": str(root),
+            "dataset.single_task": tasks[0],
+            "dataset.num_episodes": episodes,
+            "dataset.fps": config["fps"],
+            "dataset.episode_time_s": config["episode_time_s"],
+            "dataset.reset_time_s": config["reset_time_s"],
+            "dataset.video": True,
+            "dataset.vcodec": VIDEO_CODEC,
+            "dataset.push_to_hub": False,
+            "display_data": config.get("display_data", True),
+            "play_sounds": config.get("play_sounds", False),
+            "resume": resume,
+        }
+    )
+    command = [sys.executable, str(LIVE_VIDEO_SCRIPT), *option_arguments(options)]
     if len(colors) > 1:
-        command.append(TASK_CYCLE + json.dumps(list(zip(colors, tasks))))
-    return command, root.resolve()
+        command.append(TASK_CYCLE + json.dumps(list(zip(colors, tasks, strict=False))))
+    return command, root
 
 
-def validate_hardware(config, require_cameras=True):
-    for section in ("robot", "teleop"):
-        for key in ("type", "port", "id"):
+def validate_arms(config: dict[str, Any]) -> None:
+    """Raise ValueError unless both arms have their settings filled in and different ports."""
+    for section in ARM_SECTIONS:
+        for key in REQUIRED_ARM_SETTINGS:
             value = config[section].get(key)
-            if not isinstance(value, str) or not value or "SET_" in value:
+            is_filled_in = isinstance(value, str) and value and UNSET_MARK not in value
+            if not is_filled_in:
                 raise ValueError(f"Заполни {section}.{key} в config.json")
     if config["robot"]["port"] == config["teleop"]["port"]:
         raise ValueError("У ведущей и ведомой руки должны быть разные порты")
-    if not require_cameras:
-        return
+
+
+def validate_cameras(config: dict[str, Any]) -> None:
+    """Raise ValueError unless the robot has at least one camera and every camera has an index or path."""
     cameras = config["robot"].get("cameras", {})
     if not cameras:
         raise ValueError("Для VLA нужна хотя бы одна камера")
@@ -95,43 +100,81 @@ def validate_hardware(config, require_cameras=True):
             raise ValueError(f"Укажи индекс камеры {name} или удали её из настроек")
 
 
-def main():
+def require_lerobot() -> None:
+    """Raise ValueError when LeRobot is not installed in this Python."""
+    if importlib.util.find_spec("lerobot") is None:
+        raise ValueError("LeRobot не установлен в этом Python. См. раздел установки в README.md")
+
+
+def check_dataset_folder(root: Path, *, resume: bool) -> None:
+    """Raise ValueError unless --resume finds a dataset to add to, or a new recording finds its folder free."""
+    if resume and not (root / "meta" / "info.json").is_file():
+        raise ValueError("Нет существующего датасета: первый запуск сделай без --resume")
+    if not resume and root.exists():
+        raise ValueError("Папка датасета уже существует: используй --resume или другой dataset_root")
+
+
+def print_session(config: dict[str, Any], colors: list[str], root: Path) -> None:
+    if len(colors) > 1:
+        print(f"Цвета по очереди, по одному на эпизод: {', '.join(colors)}", flush=True)
+    for color in dict.fromkeys(colors):
+        print(f"Задание: {config['tasks'][color]}", flush=True)
+    print(f"Датасет: {root}", flush=True)
+
+
+def run_recorder(command: list[str]) -> int:
+    """Run the recorder and return its exit code."""
+    # Use the same interpreter/environment; never execute configuration as shell code.
+    env = os.environ.copy()
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    return subprocess.call(command, env=env)
+
+
+def record_session(args: argparse.Namespace) -> int:
+    """Check the setup and record, or just print the command with --dry-run. Returns the exit code."""
+    config = load_config(args.config)
+    colors = args.color.split(",")
+    if not set(colors) <= set(config["tasks"]):
+        raise ValueError(f"Доступные цвета: {', '.join(config['tasks'])}")
+    command, root = build_command(
+        config,
+        colors,
+        args.episodes,
+        resume=args.resume,
+    )
+    print_session(config, colors, root)
+    if args.dry_run:
+        print(shlex.join(command))
+        return 0
+    validate_arms(config)
+    validate_cameras(config)
+    require_lerobot()
+    check_dataset_folder(root, resume=args.resume)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    return run_recorder(command)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=PROJECT / "config.json")
-    parser.add_argument("--color", required=True,
-                        help="Ключ цвета из tasks в config.json; несколько через запятую идут по очереди, по эпизоду")
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH)
+    parser.add_argument(
+        "--color",
+        required=True,
+        help="Ключ цвета из tasks в config.json; несколько через запятую идут по очереди, по эпизоду",
+    )
     parser.add_argument("--episodes", type=positive_int, default=5)
     parser.add_argument("--resume", action="store_true", help="Добавить эпизоды в существующий датасет")
     parser.add_argument("--dry-run", action="store_true", help="Показать команду без подключения устройств")
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     try:
-        config = load_config(args.config)
-        colors = args.color.split(",")
-        if not set(colors) <= set(config["tasks"]):
-            raise ValueError(f"Доступные цвета: {', '.join(config['tasks'])}")
-        command, root = build_command(config, colors, args.episodes, args.resume)
-        if len(colors) > 1:
-            print(f"Цвета по очереди, по одному на эпизод: {', '.join(colors)}", flush=True)
-        for color in dict.fromkeys(colors):
-            print(f"Задание: {config['tasks'][color]}", flush=True)
-        print(f"Датасет: {root}", flush=True)
-        if args.dry_run:
-            print(shlex.join(command))
-            return 0
-        validate_hardware(config)
-        if importlib.util.find_spec("lerobot") is None:
-            raise ValueError("LeRobot не установлен в этом Python. См. раздел установки в README.md")
-        if args.resume and not (root / "meta" / "info.json").is_file():
-            raise ValueError("Нет существующего датасета: первый запуск сделай без --resume")
-        if not args.resume and root.exists():
-            raise ValueError("Папка датасета уже существует: используй --resume или другой dataset_root")
-        root.parent.mkdir(parents=True, exist_ok=True)
-        # Use the same interpreter/environment; never execute configuration as shell code.
-        env = os.environ.copy()
-        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-        return subprocess.call(command, env=env)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        parser.exit(2, f"Ошибка: {exc}\n")
+        return record_session(args)
+    except SETUP_ERRORS as exc:
+        parser.exit(SETUP_ERROR_EXIT_CODE, f"Ошибка: {exc}\n")
 
 
 if __name__ == "__main__":

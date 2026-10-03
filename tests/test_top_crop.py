@@ -1,8 +1,8 @@
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import torch

@@ -6,8 +6,8 @@ The table can hold several cubes of one colour, so a step names one exact cube b
 Nothing here moves the arm or uses the network. llm_planner.py chooses steps with a language model instead of a loop.
 """
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import cube_boxes
 
@@ -112,7 +112,13 @@ def find_rule_violation(step: PlannedStep, state: TableState) -> str | None:
 
 
 def finish_step(comment: str) -> PlannedStep:
-    return PlannedStep(FINISH, NO_CHOICE, NO_CHOICE, comment)
+    """The step that stops the plan; `comment` says why, for people."""
+    return PlannedStep(
+        kind=FINISH,
+        cube=NO_CHOICE,
+        slot=NO_CHOICE,
+        comment=comment,
+    )
 
 
 def assign_colors(colors: list[str]) -> dict[str, str]:
@@ -141,4 +147,9 @@ def next_loop_step(colors_by_slot: dict[str, str], state: TableState) -> Planned
     cube = next((cube for cube in state.free_cubes if cube.color == color), None)
     if cube is None:
         return finish_step(f"No {color} cube is free on the table; bring one back by hand")
-    return PlannedStep(PICK_AND_PLACE, cube.id, slot, f"Placing the {color} cube {cube.id} on {slot}")
+    return PlannedStep(
+        kind=PICK_AND_PLACE,
+        cube=cube.id,
+        slot=slot,
+        comment=f"Placing the {color} cube {cube.id} on {slot}",
+    )

@@ -8,11 +8,14 @@ The tokenizer on the Hub (google/paligemma-3b-pt-224) is gated; openpi itself do
 from a public Google Cloud bucket, and the fast tokenizer built from it gives the same ids (checked on our prompts).
 """
 
-from pathlib import Path
 import urllib.request
+from pathlib import Path
+from typing import Any
 
 import torch
 
+POLICY_TYPE = "pi05"  # PreTrainedConfig.type of these policies
+CAMERA_PREFIX = "observation.images."
 IMAGE_SIZE = 224  # PI05Config.image_resolution of pi05_base
 TOKENIZER_URL = "https://storage.googleapis.com/big_vision/paligemma_tokenizer.model"
 TOKENIZER_PATH = Path.home() / ".cache" / "openpi" / "big_vision" / "paligemma_tokenizer.model"  # where openpi keeps it
@@ -25,7 +28,12 @@ def resize(images: torch.Tensor) -> torch.Tensor:
     height, width = images.shape[-2:]
     ratio = max(width, height) / IMAGE_SIZE
     new_height, new_width = int(height / ratio), int(width / ratio)
-    resized = torch.nn.functional.interpolate(images, (new_height, new_width), mode="bilinear", align_corners=False)
+    resized = torch.nn.functional.interpolate(
+        images,
+        (new_height, new_width),
+        mode="bilinear",
+        align_corners=False,
+    )
     top, left = (IMAGE_SIZE - new_height) // 2, (IMAGE_SIZE - new_width) // 2
     bottom, right = IMAGE_SIZE - new_height - top, IMAGE_SIZE - new_width - left
     return torch.nn.functional.pad(resized, (left, right, top, bottom))
@@ -35,14 +43,14 @@ def shrink_cameras(frame: dict) -> dict:
     """A dataset frame with its camera images (HWC uint8) put through resize(), still HWC uint8."""
     shrunk = dict(frame)
     for key, image in frame.items():
-        if key.startswith("observation.images."):
+        if key.startswith(CAMERA_PREFIX):
             floats = torch.from_numpy(image).permute(2, 0, 1)[None].float() / 255
             resized = (resize(floats)[0].permute(1, 2, 0) * 255).round().clamp(0, 255)
             shrunk[key] = resized.numpy().astype("uint8")
     return shrunk
 
 
-def load_tokenizer():
+def load_tokenizer() -> Any:
     """The PaliGemma tokenizer, downloaded once to TOKENIZER_PATH (4 MB)."""
     from transformers import GemmaTokenizerFast
 

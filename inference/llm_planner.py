@@ -9,15 +9,17 @@ The cropped top camera frame leaves this computer, so keep OPENROUTER_API_KEY in
 """
 
 import base64
-from dataclasses import asdict
 import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import asdict
 
 import cv2
+import numpy as np
 
 import cube_boxes
+import top_crop
 from pyramid_plan import (
     FINISH,
     NO_CHOICE,
@@ -29,7 +31,6 @@ from pyramid_plan import (
     TableState,
     find_rule_violation,
 )
-import top_crop
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "anthropic/claude-opus-5.5"
@@ -92,25 +93,49 @@ colour and its place on the table, not by its id.
 
 
 def read_api_key() -> str:
+    """The OpenRouter key from the environment. Raises RuntimeError, saying what to do, if it is not set."""
     api_key = os.environ.get(API_KEY_VARIABLE)
     if not api_key:
         raise RuntimeError(f"{API_KEY_VARIABLE} is not set: create a key at https://openrouter.ai/keys and export it")
     return api_key
 
 
-def draw_cube_ids(top_rgb, cubes: list[Cube]):
+def draw_cube_ids(top_rgb: np.ndarray, cubes: list[Cube]) -> np.ndarray:
     """A copy of an HxWx3 uint8 RGB top camera frame with each cube's id in the middle of its box."""
     labelled = top_rgb.copy()
     for cube in cubes:
         x0, y0, x1, y1 = cube.box
-        (text_width, text_height), _ = cv2.getTextSize(cube.id, ID_FONT, ID_FONT_SCALE, ID_THICKNESS)
+        (text_width, text_height), _ = cv2.getTextSize(
+            cube.id,
+            ID_FONT,
+            ID_FONT_SCALE,
+            ID_THICKNESS,
+        )
         origin = ((x0 + x1 - text_width) // 2, (y0 + y1 + text_height) // 2)
-        cv2.putText(labelled, cube.id, origin, ID_FONT, ID_FONT_SCALE, BLACK, ID_OUTLINE_THICKNESS, cv2.LINE_AA)
-        cv2.putText(labelled, cube.id, origin, ID_FONT, ID_FONT_SCALE, WHITE, ID_THICKNESS, cv2.LINE_AA)
+        cv2.putText(
+            labelled,
+            cube.id,
+            origin,
+            ID_FONT,
+            ID_FONT_SCALE,
+            BLACK,
+            ID_OUTLINE_THICKNESS,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            labelled,
+            cube.id,
+            origin,
+            ID_FONT,
+            ID_FONT_SCALE,
+            WHITE,
+            ID_THICKNESS,
+            cv2.LINE_AA,
+        )
     return labelled
 
 
-def encode_top_view(top_rgb, cubes: list[Cube]) -> bytes:
+def encode_top_view(top_rgb: np.ndarray, cubes: list[Cube]) -> bytes:
     """JPEG bytes of an HxWx3 uint8 RGB top camera frame with the cubes' ids on it, cropped as for the policy."""
     view_bgr = cv2.cvtColor(top_crop.crop_hwc(draw_cube_ids(top_rgb, cubes)), cv2.COLOR_RGB2BGR)
     is_encoded, jpeg = cv2.imencode(".jpg", view_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
@@ -183,12 +208,17 @@ def parse_step(answer: dict) -> PlannedStep:
     )
     if not is_valid:
         raise RuntimeError(f"The model's answer is outside the schema: {fields!r}")
-    return PlannedStep(fields["kind"], fields["cube"], fields["slot"], fields["comment"])
+    return PlannedStep(
+        kind=fields["kind"],
+        cube=fields["cube"],
+        slot=fields["slot"],
+        comment=fields["comment"],
+    )
 
 
 def choose_step(
     goal: str,
-    top_rgb,
+    top_rgb: np.ndarray,
     state: TableState,
     history: list[HistoryEntry],
     *,
@@ -202,7 +232,13 @@ def choose_step(
     """
     top_jpeg = encode_top_view(top_rgb, state.free_cubes)
     for _ in range(MAX_REJECTED_ANSWERS):
-        body = build_request_body(goal, state, history, top_jpeg, model)
+        body = build_request_body(
+            goal,
+            state,
+            history,
+            top_jpeg,
+            model,
+        )
         step = parse_step(post_chat_completion(body, api_key))
         problem = find_rule_violation(step, state)
         if problem is None:

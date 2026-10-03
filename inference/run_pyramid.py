@@ -11,10 +11,10 @@ each step the id, colour and box of the exact cube to take.
 """
 
 import argparse
-from dataclasses import asdict
 import json
-from pathlib import Path
 import sys
+from dataclasses import asdict
+from pathlib import Path
 
 import cv2
 
@@ -32,7 +32,6 @@ from pyramid_plan import (
 
 LOOP_PLANNER, LLM_PLANNER = "loop", "llm"
 DEFAULT_COLORS = "red,blue,yellow"
-TOP_FRAME_SHAPE = (720, 1280)  # the frame cube_boxes.py is tuned for
 
 
 def load_frame(path: Path):
@@ -40,7 +39,7 @@ def load_frame(path: Path):
     frame_bgr = cv2.imread(str(path))
     if frame_bgr is None:
         raise ValueError(f"{path}: cannot read it as an image")
-    if frame_bgr.shape[:2] != TOP_FRAME_SHAPE:
+    if frame_bgr.shape[:2] != cube_boxes.TOP_FRAME_SHAPE:
         height, width = frame_bgr.shape[:2]
         raise ValueError(f"{path}: expected a 1280x720 top camera frame, got {width}x{height}")
     return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -61,7 +60,13 @@ def load_slot_boxes(path: Path | None) -> dict[str, list[int]]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--planner", choices=(LOOP_PLANNER, LLM_PLANNER), default=LOOP_PLANNER)
-    parser.add_argument("--frame", type=Path, nargs="+", required=True, help="Top camera frames, in order")
+    parser.add_argument(
+        "--frame",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Top camera frames, in order",
+    )
     parser.add_argument("--slot-boxes", type=Path, help="JSON file with the box of each slot")
     parser.add_argument("--colors", default=DEFAULT_COLORS, help="loop: colours for base_left, base_right and top")
     parser.add_argument("--goal", help="llm: what to build, in free form")
@@ -85,7 +90,14 @@ def make_step_chooser(args: argparse.Namespace):
     api_key = read_api_key()
 
     def choose_llm_step(top_rgb, state, history):
-        return choose_step(args.goal, top_rgb, state, history, api_key=api_key, model=args.model)
+        return choose_step(
+            args.goal,
+            top_rgb,
+            state,
+            history,
+            api_key=api_key,
+            model=args.model,
+        )
 
     return choose_llm_step
 
