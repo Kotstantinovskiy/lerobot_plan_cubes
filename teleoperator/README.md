@@ -238,8 +238,9 @@ After pairing, turn the iPhone sideways to open the two-thumb remote. The shared
 control page also has a **Пульт** button for trying this layout in a Mac browser.
 **3D** returns to the normal scene.
 
-- The left stick moves the tool parallel to the table. Right is positive model X;
-  up is positive model Y. The camera images are not geometrically registered, so
+- The left stick moves the tool parallel to the table, as seen from behind the arm.
+  Up is forward, away from the base (positive model X); right is the arm's right
+  (negative model Y). The camera images are not geometrically registered, so
   rotating a camera or the 3D scene does not redefine these directions.
 - The right stick raises/lowers the tool and rotates the wrist. Up raises the tool;
   moving right increases wrist roll. Both sticks can be held together.

@@ -116,9 +116,24 @@ describe("landscape dual-thumb controller", () => {
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
   });
 
+  it("steers the table as seen from behind the arm: up is forward and right is the arm's right", () => {
+    enter();
+    pointer("left", "pointerdown", 100, 0);
+    expect(values()).toEqual([1, 0, 0, 0, 0]);
+    pointer("left", "pointermove", 200, 100);
+    advance(50);
+    expect(values()).toEqual([0, -1, 0, 0, 0]);
+    pointer("left", "pointermove", 100, 200);
+    advance(50);
+    expect(values()).toEqual([-1, 0, 0, 0, 0]);
+    pointer("left", "pointermove", 0, 100);
+    advance(50);
+    expect(values()).toEqual([0, 1, 0, 0, 0]);
+  });
+
   it("combines two thumbs, normalizes Cartesian motion, and releases each thumb independently", () => {
     enter();
-    pointer("left", "pointerdown", 200, 100, 1);
+    pointer("left", "pointerdown", 100, 0, 1);
     pointer("right", "pointerdown", 100, 0, 2);
     advance(50);
     expect(values()[0]).toBeCloseTo(Math.SQRT1_2);
@@ -127,7 +142,7 @@ describe("landscape dual-thumb controller", () => {
     pointer("right", "pointermove", 200, 100, 2);
     advance(50);
     expect(values()).toEqual([1, 0, 0, 1, 0]);
-    pointer("left", "pointerup", 200, 100, 1);
+    pointer("left", "pointerup", 100, 0, 1);
     expect(values()).toEqual([0, 0, 0, 1, 0]);
     pointer("right", "pointerup", 200, 100, 2);
     expect(values()).toEqual([0, 0, 0, 0, 0]);
@@ -141,8 +156,8 @@ describe("landscape dual-thumb controller", () => {
     expect(stickValue(0.56, 0)[0]).toBeCloseTo(0.5);
     expect(stickValue(10, 0)).toEqual([1, 0]);
     enter();
-    pointer("left", "pointerdown", 170, 100);
-    for (let x = 171; x <= 190; x++) pointer("left", "pointermove", x, 100);
+    pointer("left", "pointerdown", 100, 30);
+    for (let y = 29; y >= 10; y--) pointer("left", "pointermove", 100, y);
     expect(onChange).toHaveBeenCalledTimes(1);
     advance(50);
     expect(onChange).toHaveBeenCalledTimes(2);
@@ -154,7 +169,7 @@ describe("landscape dual-thumb controller", () => {
     enter();
     pointer("left", "pointerdown", 0, 0, 1);
     expect(onChange).not.toHaveBeenCalled();
-    pointer("left", "pointerdown", 200, 100, 1);
+    pointer("left", "pointerdown", 100, 0, 1);
     pointer("right", "pointerdown", 200, 100, 1);
     advance(50);
     expect(values()).toEqual([1, 0, 0, 0, 0]);
@@ -162,7 +177,7 @@ describe("landscape dual-thumb controller", () => {
 
   it("allows one thumb to move the arm while the other opens or closes the gripper", () => {
     enter();
-    pointer("left", "pointerdown", 200, 100, 1);
+    pointer("left", "pointerdown", 100, 0, 1);
     pointer("open", "pointerdown", 100, 100, 2);
     advance(50);
     expect(values()).toEqual([1, 0, 0, 0, 1]);
@@ -180,7 +195,7 @@ describe("landscape dual-thumb controller", () => {
 
   it("does not accept a third touch while both sticks are in use", () => {
     enter();
-    pointer("left", "pointerdown", 200, 100, 1);
+    pointer("left", "pointerdown", 100, 0, 1);
     pointer("right", "pointerdown", 200, 100, 2);
     pointer("open", "pointerdown", 100, 100, 3);
     advance(50);
@@ -213,7 +228,7 @@ describe("landscape dual-thumb controller", () => {
     pointer("left", "pointermove", 200, 100);
     advance(250);
     expect(onChange).toHaveBeenCalledTimes(count);
-    pointer("left", "pointerdown", 200, 100);
+    pointer("left", "pointerdown", 100, 0);
     expect(values()).toEqual([1, 0, 0, 0, 0]);
   });
 
@@ -228,7 +243,7 @@ describe("landscape dual-thumb controller", () => {
     click("Включить");
     expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "enable" });
     render({ ...preview, hardware: true, connected: true, enabled: true, status: "Управление включено" });
-    pointer("left", "pointerdown", 200, 100);
+    pointer("left", "pointerdown", 100, 0);
     expect(values()).toEqual([1, 0, 0, 0, 0]);
   });
 

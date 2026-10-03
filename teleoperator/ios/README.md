@@ -68,7 +68,8 @@ Rotate the connected iPhone horizontally to open the two-thumb remote. The
 native header becomes compact and retains **Отключиться**. Rotation resizes the
 existing WebView without reloading it or changing the pairing link.
 
-- The left stick moves the gripper parallel to the table.
+- The left stick moves the gripper parallel to the table, as seen from behind
+  the arm: up is forward, away from the base, and right is the arm's right.
 - The right stick raises or lowers the gripper vertically and turns the wrist
   horizontally.
 - Hold **Открыть** or **Закрыть** to change the jaw opening.

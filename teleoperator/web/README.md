@@ -44,8 +44,9 @@ The same component is used on macOS and in the iOS web view.
 The landscape remote has a table-plane thumbstick on the left, two camera
 previews in the center, and a height/wrist thumbstick on the right. Hold
 **Открыть** or **Закрыть** to change the gripper opening. The left stick uses
-fixed robot-world X/Y directions, independently of 3D camera orbit: right is
-positive X and up is positive Y. On the right, up raises Z and right increases
+fixed robot-world X/Y directions, independently of 3D camera orbit: up is
+positive X (forward, away from the base) and right is negative Y (the arm's
+right). On the right, up raises Z and right increases
 wrist roll. Camera mounting orientation is not automatically calibrated.
 
 Native iOS identifies its WebView with `Teleoperator/1.0`; landscape widths of

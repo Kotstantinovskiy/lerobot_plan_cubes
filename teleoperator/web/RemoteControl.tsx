@@ -49,7 +49,8 @@ export default function RemoteControl({ hint, onChange }: Props) {
   const send = React.useCallback((neutral = false) => {
     const current = latest.current;
     if (!current.connected || current.state === null) return;
-    let [x, y, z] = neutral ? [0, 0, 0] : [left.current[0], left.current[1], right.current[1]];
+    // The left stick steers as seen from behind the arm: up is forward (model +X), right is the arm's right (model -Y).
+    let [x, y, z] = neutral ? [0, 0, 0] : [left.current[1], -left.current[0], right.current[1]];
     const length = Math.hypot(x, y, z);
     if (length > 1) { x /= length; y /= length; z /= length; }
     current.onChange(JSON.stringify([
