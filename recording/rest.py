@@ -4,7 +4,8 @@
 Joints move in phases so a gripper lying on the table rises before the base turns: shoulder and elbow,
 then wrist and gripper, then the base. A joint lagging behind its command pauses the motion until it
 catches up. Works with torque on or off at the start; torque is disabled on exit, and the folded pose
-rests on its own. Ctrl+C stops the motion and disables torque immediately.
+rests on its own. Ctrl+C stops the motion and disables torque immediately. With --dry-run, or if the calibration does
+not match, the arm is only read: its torque stays as it was, so an arm held up by it does not drop.
 """
 
 import argparse
@@ -109,7 +110,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_STEP,
         help="Max change per frame per joint (normalized units)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Read positions and print the plan; nothing moves")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read positions and print the plan; nothing moves and torque stays as it is",
+    )
     args = parser.parse_args()
     if not 0 < args.step <= MAX_STEP:
         parser.error(f"Step must be in (0, {MAX_STEP}]")
@@ -128,6 +133,7 @@ def main():
     # Torque_Enable writes occasionally get no status packet (seen on ids 2, 4 and 6); rewriting is idempotent.
     robot.bus.enable_torque = functools.partial(robot.bus.enable_torque, num_retry=TORQUE_WRITE_RETRIES)
     robot.bus.disable_torque = functools.partial(robot.bus.disable_torque, num_retry=TORQUE_WRITE_RETRIES)
+    has_taken_over = False
     try:
         robot.bus.connect()
         if not robot.is_calibrated:
@@ -137,6 +143,7 @@ def main():
         print("Rest: " + format_pose({motor: rest[motor] for motor in present}), flush=True)
         if args.dry_run:
             return
+        has_taken_over = True
         if not all(robot.bus.sync_read("Torque_Enable").values()):
             robot.bus.sync_write("Goal_Position", present)  # no jump to a stale goal when torque comes on
             robot.configure()  # also enables torque; skipped when it is on, as it briefly releases the joints
@@ -149,8 +156,9 @@ def main():
         print("Done: " + format_pose(final), flush=True)
     finally:
         if robot.bus.is_connected:
-            robot.bus.disconnect(disable_torque=True)
-            print("Follower disconnected; torque disabled.", flush=True)
+            robot.bus.disconnect(disable_torque=has_taken_over)
+            torque_state = "torque disabled" if has_taken_over else "torque left as it was"
+            print(f"Follower disconnected; {torque_state}.", flush=True)
 
 
 if __name__ == "__main__":

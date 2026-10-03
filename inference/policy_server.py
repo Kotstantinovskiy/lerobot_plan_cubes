@@ -15,6 +15,7 @@ import functools
 import json
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from multiprocessing.connection import Connection, Listener
 from pathlib import Path
@@ -151,14 +152,20 @@ def answer_chunk(request: dict, compute: Callable, device: torch.device) -> byte
 
 
 def serve_client(connection: Connection, info: dict, answer: Callable) -> None:
-    """Send a new client `info`, then answer its requests until it leaves."""
+    """Send a new client `info`, then answer its requests until it leaves.
+
+    A request that cannot be answered ends this client's connection, not the server: the model takes minutes to load.
+    """
     print("Client connected", flush=True)
-    connection.send_bytes(json.dumps(info).encode())
     try:
+        connection.send_bytes(json.dumps(info).encode())
         while True:
             connection.send_bytes(answer(unpack(connection.recv_bytes())))
     except (EOFError, ConnectionError):
         print("Client left", flush=True)
+    except Exception:
+        print("Client dropped: its request could not be answered", flush=True)
+        traceback.print_exc()
 
 
 def main() -> None:

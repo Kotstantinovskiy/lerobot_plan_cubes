@@ -83,7 +83,8 @@ def add_chunk_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--replan",
         type=positive_int,
-        help="Compute the next chunk in the background after this many actions of the current one",
+        help="Compute the next chunk in the background after this many actions of the current one; "
+        "must be below --n-action-steps",
     )
     parser.add_argument(
         "--start-threshold",
@@ -272,15 +273,20 @@ def report_run(run: arm_control.ArmRun, state: arm_control.RunState) -> None:
 
 
 def finish_run(run: arm_control.ArmRun, state: arm_control.RunState, config: dict) -> None:
-    """However the run ended: fold the arm back unless --no-rest, turn torque off, close the video, report the run."""
-    if run.robot.bus.is_connected:  # robot.is_connected is also False when only a camera has failed
-        if not run.args.no_rest:
-            arm_control.fold_if_holding(run.robot, config, run.facts.fps)
-        arm_control.disconnect_arm(run.robot)
-    arm_control.close_video(run.video)
-    if run.background is not None:
-        run.background.shutdown(cancel_futures=True)
-    report_run(run, state)
+    """However the run ended: fold the arm back unless --no-rest, turn torque off, close the video, report the run.
+
+    An arm that was refused has its bus closed by now and is left as it is.
+    """
+    try:
+        if run.robot.bus.is_connected:  # robot.is_connected is also False when only a camera has failed
+            if not run.args.no_rest:
+                arm_control.fold_if_holding(run.robot, config, run.facts.fps)
+            arm_control.disconnect_arm(run.robot)
+    finally:
+        arm_control.close_video(run.video)
+        if run.background is not None:
+            run.background.shutdown(cancel_futures=True)
+        report_run(run, state)
 
 
 def run_on_arm(
@@ -319,11 +325,23 @@ def run_on_arm(
         finish_run(run, state, config)
 
 
+def check_chunk_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Exit through the parser on chunk options that would silently do nothing."""
+    if args.rtc and not (args.replan or args.dry_run):
+        parser.error("--rtc guides the chunks computed in the background; add --replan")
+    # The loop looks for --replan actions run before it takes each one, so the last chunk action it can start from is
+    # number --n-action-steps minus one.
+    if args.replan and args.replan >= args.n_action_steps:
+        parser.error(
+            f"--replan {args.replan} would never start: a chunk runs out after --n-action-steps "
+            f"({args.n_action_steps}) actions; use a smaller --replan"
+        )
+
+
 def main() -> None:
     parser = make_parser()
     args = parser.parse_args()
-    if args.rtc and not (args.replan or args.dry_run):
-        parser.error("--rtc guides the chunks computed in the background; add --replan")
+    check_chunk_arguments(parser, args)
 
     config = load_config(args.config)
     task = config["tasks"][args.color]

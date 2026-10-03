@@ -185,6 +185,42 @@ class ServeClientTests(unittest.TestCase):
         connection.recv_bytes.side_effect = ConnectionResetError
         self.assertIn("Client left", self.serve(connection, MagicMock()))
 
+    def test_client_gone_before_the_info_is_not_an_error(self):
+        connection = MagicMock()
+        connection.send_bytes.side_effect = BrokenPipeError
+        self.assertIn("Client left", self.serve(connection, MagicMock()))
+
+    def serve_bad_request(self, connection, answer):
+        """Serve a client whose request cannot be answered; gives what went to stdout and to stderr."""
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            printed = self.serve(connection, answer)
+        return printed, errors.getvalue()
+
+    def test_request_without_a_task_drops_only_that_client(self):
+        connection = MagicMock()
+        connection.recv_bytes.return_value = pack(number=1)
+
+        def answer(request):
+            return policy_server.answer_chunk(request, make_compute(), DEVICE)
+
+        printed, errors = self.serve_bad_request(connection, answer)
+        self.assertIn("Client dropped", printed)
+        self.assertIn("KeyError", errors)
+
+    def test_message_that_is_no_archive_drops_only_that_client(self):
+        connection = MagicMock()
+        connection.recv_bytes.return_value = b"not an archive"
+        printed, _ = self.serve_bad_request(connection, MagicMock())
+        self.assertIn("Client dropped", printed)
+
+    def test_failing_model_drops_only_that_client(self):
+        connection = MagicMock()
+        connection.recv_bytes.return_value = pack(number=1)
+        printed, errors = self.serve_bad_request(connection, MagicMock(side_effect=RuntimeError("out of memory")))
+        self.assertIn("Client dropped", printed)
+        self.assertIn("out of memory", errors)
+
 
 if __name__ == "__main__":
     unittest.main()

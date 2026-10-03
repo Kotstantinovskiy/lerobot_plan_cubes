@@ -84,6 +84,27 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("add --replan", printed.getvalue())
 
+    def check_chunk_arguments(self, *arguments):
+        """Run the check on these arguments; gives what it printed as a usage error, empty if it passed."""
+        parser = run_policy.make_parser()
+        printed = io.StringIO()
+        with contextlib.redirect_stderr(printed), contextlib.suppress(SystemExit):
+            run_policy.check_chunk_arguments(parser, self.parse(*arguments))
+        return printed.getvalue()
+
+    def test_replan_as_long_as_the_chunk_would_never_start(self):
+        self.assertIn("--replan 50 would never start", self.check_chunk_arguments("--replan", "50"))
+
+    def test_replan_longer_than_shortened_chunks_would_never_start(self):
+        printed = self.check_chunk_arguments("--replan", "20", "--n-action-steps", "10")
+        self.assertIn("--replan 20 would never start", printed)
+
+    def test_replan_at_the_last_action_of_a_chunk_is_accepted(self):
+        self.assertEqual(self.check_chunk_arguments("--replan", "49"), "")
+
+    def test_no_replan_is_accepted_with_any_chunk_length(self):
+        self.assertEqual(self.check_chunk_arguments("--n-action-steps", "1"), "")
+
 
 class RunFactsTests(unittest.TestCase):
     INFO = {"features": FEATURES, "fps": FPS, "low": [0, 1], "high": [10, 11], "policy": "/srv/policy"}
@@ -202,6 +223,46 @@ class RunOnArmTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no port"):
             self.run_on_arm(make_args())
         self.assertNotIn(ARM_RELEASED, self.robot.calls)
+
+    def test_refused_arm_is_neither_folded_nor_released(self):
+        self.robot.bus.torque = 1
+        with self.assertRaisesRegex(RuntimeError, "torque disabled"):
+            self.run_on_arm(make_args())
+        self.assertNotIn(FOLD, self.robot.calls)
+        self.assertNotIn(ARM_RELEASED, self.robot.calls)
+        self.assertEqual(self.robot.calls[-1], "bus.disconnect(disable_torque=False)")
+
+    def test_refusal_still_closes_the_video(self):
+        self.robot.bus.torque = 1
+        with self.assertRaises(RuntimeError):
+            self.run_on_arm(make_args())
+        self.video.container.close.assert_called_once_with()
+
+    def test_ctrl_c_during_the_disconnect_still_disables_torque(self):
+        self.robot.disconnect_error = KeyboardInterrupt()
+        self.run_on_arm(make_args())
+        self.assertEqual(self.robot.calls[-1], "bus.disconnect(disable_torque=True)")
+
+    def test_ctrl_c_during_the_disconnect_still_closes_the_video_and_reports(self):
+        self.robot.disconnect_error = KeyboardInterrupt()
+        self.run_on_arm(make_args())
+        self.video.container.close.assert_called_once_with()
+        self.assertIn("Summary:", self.printed.getvalue())
+
+    def test_failing_last_resort_still_closes_the_video_and_reports(self):
+        self.robot.disconnect_error = KeyboardInterrupt()
+        closes_the_port = self.robot.bus.disconnect
+
+        def fail_to_disable_torque(disable_torque=True):
+            if disable_torque:
+                raise OSError("port gone")
+            closes_the_port(disable_torque=False)
+
+        self.robot.bus.disconnect = fail_to_disable_torque
+        with self.assertRaisesRegex(OSError, "port gone"):
+            self.run_on_arm(make_args())
+        self.video.container.close.assert_called_once_with()
+        self.assertIn("Summary:", self.printed.getvalue())
 
     def test_summary_is_printed_with_the_counters_by_name(self):
         self.run_on_arm(make_args())

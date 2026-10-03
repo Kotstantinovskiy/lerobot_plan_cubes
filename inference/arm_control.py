@@ -30,6 +30,7 @@ from lerobot.utils.robot_utils import precise_sleep
 
 import cube_boxes
 import top_crop
+from follower_bus import connect_free_bus
 from remote_policy import PlannedChunk
 from rest import fold_to_rest
 
@@ -142,13 +143,12 @@ def build_robot(robot_fields: dict, max_step: float) -> Any:
 
 
 def connect_arm(robot: Any) -> None:
-    """Connect bus and cameras and enable torque. Raises RuntimeError on bad calibration or with torque already on."""
-    # With torque still off: check calibration and replace any stale goal, so enabling torque cannot jump.
-    robot.bus.connect()
-    if not robot.is_calibrated:
-        raise RuntimeError("Calibration mismatch; refusing automatic calibration")
-    if any(robot.bus.sync_read("Torque_Enable").values()):
-        raise RuntimeError("Expected motors at rest with torque disabled")
+    """Connect bus and cameras and enable torque.
+
+    Raises RuntimeError on bad calibration or with torque already on, leaving the arm as it is with the port closed.
+    """
+    connect_free_bus(robot)
+    # With torque still off: replace any stale goal, so enabling torque cannot jump.
     robot.bus.sync_write("Goal_Position", robot.bus.sync_read("Present_Position"))
     robot.bus.disconnect(disable_torque=False)
     robot.connect(calibrate=False)
@@ -173,11 +173,13 @@ def fold_if_holding(robot: Any, config: dict, fps: int) -> None:
 
 
 def disconnect_arm(robot: Any) -> None:
-    """Disconnect bus and cameras with torque disabled; a failing camera does not keep the torque on."""
+    """Disconnect bus and cameras with torque disabled; neither a failing camera nor Ctrl+C keeps the torque on."""
     try:
         robot.disconnect()
-    except Exception:
-        robot.bus.disconnect(disable_torque=True)
+    except (Exception, KeyboardInterrupt):
+        # A closed bus means robot.disconnect() got that far, and it disables torque before closing.
+        if robot.bus.is_connected:
+            robot.bus.disconnect(disable_torque=True)
     print("Follower disconnected; torque disabled.", flush=True)
 
 

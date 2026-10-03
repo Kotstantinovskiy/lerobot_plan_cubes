@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from lerobot.robots import RobotConfig, make_robot_from_config, so_follower  # noqa: F401
 
+from follower_bus import connect_free_bus
 from project_config import CONFIG_PATH, load_config
 
 APPROACH_S = 4  # how long the move to the episode's start takes at full speed
@@ -70,13 +71,8 @@ def check_follower(robot, action_names: list[str]) -> None:
         raise RuntimeError(f"Missing or incomplete follower calibration: {robot.calibration_fpath}")
 
 
-def connect_follower(robot, action_names: list[str]) -> np.ndarray:
-    """Connect the follower and enable torque where it stands; returns that position in the order of the actions."""
-    robot.bus.connect()
-    if not robot.is_calibrated:
-        raise RuntimeError("Calibration mismatch; refusing automatic calibration")
-    if any(robot.bus.sync_read("Torque_Enable").values()):
-        raise RuntimeError("Expected motors at rest with torque disabled")
+def take_over_follower(robot, action_names: list[str]) -> np.ndarray:
+    """Enable torque on a free follower where it stands; returns that position in the order of the actions."""
     current = robot.bus.sync_read("Present_Position")
     initial = np.array([current[name.removesuffix(".pos")] for name in action_names])
     # Set current targets while torque is off, avoiding a jump to a stale goal on enable.
@@ -138,9 +134,13 @@ def replay_on_follower(
     fps: int,
     episode: int,
 ) -> None:
-    """Connect, move gradually to the first action and replay the rest; the follower is always disconnected after."""
+    """Connect, move gradually to the first action and replay the rest.
+
+    A follower that is not free is refused and left as it is; one taken over is always disconnected with torque off.
+    """
+    connect_free_bus(robot)
     try:
-        initial = connect_follower(robot, action_names)
+        initial = take_over_follower(robot, action_names)
         move_to_start(
             robot,
             action_names,

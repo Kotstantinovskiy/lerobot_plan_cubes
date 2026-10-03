@@ -159,6 +159,16 @@ class ConnectArmTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "torque disabled"):
             connect_arm(robot)
 
+    def test_refused_arm_keeps_its_torque_and_the_port_is_closed(self):
+        robot = FakeRobot()
+        robot.bus.torque = 1
+        with self.assertRaises(RuntimeError):
+            connect_arm(robot)
+        self.assertEqual(
+            robot.calls,
+            ["bus.connect", "bus.sync_read(Torque_Enable)", "bus.disconnect(disable_torque=False)"],
+        )
+
 
 class LettingGoTests(unittest.TestCase):
     def setUp(self):
@@ -195,9 +205,22 @@ class LettingGoTests(unittest.TestCase):
         self.assertIn("Return to rest stopped: KeyError('rest_pose')", printed.getvalue())
 
     def test_failed_disconnect_still_disables_torque_on_the_bus(self):
+        self.robot.bus.is_connected = True
         self.robot.disconnect_error = RuntimeError("camera gone")
         silently(disconnect_arm, self.robot)
         self.assertEqual(self.robot.calls, ["robot.disconnect", "bus.disconnect(disable_torque=True)"])
+
+    def test_ctrl_c_during_the_disconnect_still_disables_torque_on_the_bus(self):
+        self.robot.bus.is_connected = True
+        self.robot.disconnect_error = KeyboardInterrupt()
+        silently(disconnect_arm, self.robot)
+        self.assertEqual(self.robot.calls, ["robot.disconnect", "bus.disconnect(disable_torque=True)"])
+
+    def test_bus_closed_before_a_camera_failed_is_not_closed_again(self):
+        self.robot.bus.is_connected = False
+        self.robot.disconnect_error = RuntimeError("camera gone")
+        silently(disconnect_arm, self.robot)
+        self.assertEqual(self.robot.calls, ["robot.disconnect"])
 
 
 class VideoTests(unittest.TestCase):
