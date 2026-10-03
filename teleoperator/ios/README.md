@@ -15,8 +15,10 @@ kinematics and motion limits. The app requires iOS 16 or newer.
 4. Select an iPhone or iPhone Simulator and run the Teleoperator scheme.
 
 There are no package dependencies. The checked-in project and shared scheme are
-complete. A distribution app icon and App Store metadata are not included in
-this prototype.
+complete. The app icon is `../logo.svg` rendered with square corners, because iOS
+rounds them itself. It ships as two PNG files named in `Info.plist` rather than an
+asset catalog, because the catalog compiler (`actool`) fails on a Mac without an
+installed simulator runtime. App Store metadata is not included in this prototype.
 
 ## Connect
 

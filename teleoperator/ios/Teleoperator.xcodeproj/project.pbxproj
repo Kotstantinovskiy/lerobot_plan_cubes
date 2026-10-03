@@ -13,6 +13,8 @@
 		A10000000000000000000004 /* PairingEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* PairingEndpoint.swift */; };
 		A10000000000000000000005 /* RobotWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* RobotWebView.swift */; };
 		A10000000000000000000006 /* QRScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* QRScanner.swift */; };
+		A10000000000000000000007 /* AppIcon60x60@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* AppIcon60x60@2x.png */; };
+		A10000000000000000000008 /* AppIcon60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* AppIcon60x60@3x.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +26,8 @@
 		A20000000000000000000006 /* QRScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScanner.swift; sourceTree = "<group>"; };
 		A20000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000008 /* Teleoperator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Teleoperator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000009 /* AppIcon60x60@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@2x.png"; sourceTree = "<group>"; };
+		A2000000000000000000000A /* AppIcon60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@3x.png"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +59,8 @@
 				A20000000000000000000005 /* RobotWebView.swift */,
 				A20000000000000000000006 /* QRScanner.swift */,
 				A20000000000000000000007 /* Info.plist */,
+				A20000000000000000000009 /* AppIcon60x60@2x.png */,
+				A2000000000000000000000A /* AppIcon60x60@3x.png */,
 			);
 			path = Teleoperator;
 			sourceTree = "<group>";
@@ -127,6 +133,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000007 /* AppIcon60x60@2x.png in Resources */,
+				A10000000000000000000008 /* AppIcon60x60@3x.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
