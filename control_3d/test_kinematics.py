@@ -7,7 +7,7 @@ import pytest
 from yourdfpy import URDF
 
 from control_3d.hardware import SO101Hardware
-from control_3d.kinematics import JOINT_NAMES, MODEL_PATH, TOOL_FRAME, Kinematics
+from control_3d.kinematics import JOINT_NAMES, MODEL_PATH, TOOL_FRAME, BelowMinimumHeight, Kinematics
 
 
 @pytest.fixture
@@ -103,6 +103,53 @@ def test_floor_guard_rejects_a_valid_joint_range_pose(kinematics):
                 kinematics.validate(angles)
             return
     pytest.fail("Expected at least one joint-limit-valid pose below the floor")
+
+
+def test_pose_past_a_limit_may_stay_or_move_back_but_not_further(kinematics):
+    past_limit = np.deg2rad([0, -105, 103, 80, 0])
+    with pytest.raises(ValueError, match="limits"):
+        kinematics.validate(past_limit)
+    kinematics.validate(past_limit, current_angles=past_limit)
+    moved_back = past_limit + np.deg2rad([0, 1, -1, 0, 0])
+    kinematics.validate(moved_back, current_angles=past_limit)
+    further_out = past_limit + np.deg2rad([0, -1, 0, 0, 0])
+    with pytest.raises(ValueError, match="limits"):
+        kinematics.validate(further_out, current_angles=past_limit)
+
+
+def test_tool_below_the_floor_may_stay_or_rise_but_not_sink(kinematics):
+    low = np.deg2rad([0, -85, 85, 80, 0])
+    height = kinematics.forward(low)[2, 3]
+    assert height < kinematics.min_height
+    kinematics.validate(low, current_angles=low)
+    risen = low + np.deg2rad([0, 2, -2, 0, 0])
+    assert kinematics.forward(risen)[2, 3] > height
+    kinematics.validate(risen, current_angles=low)
+    sunk = low + np.deg2rad([0, -2, 2, 0, 0])
+    assert kinematics.forward(sunk)[2, 3] < height
+    with pytest.raises(BelowMinimumHeight):
+        kinematics.validate(sunk, current_angles=low)
+
+
+def test_kept_wrist_flex_stays_at_its_seed_angle(kinematics):
+    seed = np.deg2rad([0, -100, 100, 80, 0])
+    tool = kinematics.forward(seed)[:3, 3]
+    target = tool + [0, 0, 0.005]
+    angles = kinematics.solve(target, seed, current_angles=seed, keep_wrist_flex=True)
+    assert angles[3] == pytest.approx(seed[3], abs=1e-5)
+    np.testing.assert_allclose(kinematics.forward(angles)[:3, 3], target, atol=0.001)
+
+
+def test_solution_may_stay_as_far_past_a_limit_as_the_current_pose(kinematics):
+    past_limit = np.deg2rad([0, -105, 103, 80, 0])
+    tool = kinematics.forward(past_limit)[:3, 3]
+    target = tool + [0, 0, 0.001]
+    with pytest.raises(ValueError):
+        kinematics.solve(target, past_limit)
+    angles = kinematics.solve(target, past_limit, current_angles=past_limit)
+    np.testing.assert_allclose(kinematics.forward(angles)[:3, 3], target, atol=0.001)
+    assert angles[1] >= past_limit[1] - 1e-6
+    assert angles[2] <= past_limit[2] + 1e-6
 
 
 def test_degrees_round_trip_with_current_motor_calibration():

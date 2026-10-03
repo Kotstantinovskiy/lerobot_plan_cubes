@@ -8,6 +8,9 @@ from pathlib import Path
 JOINT_NAMES = (
     "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper",
 )
+# Largest goal step past the present position, in degrees. Servo force follows that position error,
+# so a small step leaves the elbow too weak to lift the arm and it stalls under the arm's weight.
+MAX_GOAL_STEP_DEGREES = 10.0
 
 
 def make_robot(fields):
@@ -28,7 +31,7 @@ class SO101Hardware:
     Disarming releases the arm, so support it before disabling torque.
     """
 
-    def __init__(self, config_path, max_relative_target=3.0):
+    def __init__(self, config_path, max_relative_target=MAX_GOAL_STEP_DEGREES):
         config_path = Path(config_path).expanduser().resolve()
         config = json.loads(config_path.read_text())
         fields = config["robot"]
@@ -51,6 +54,7 @@ class SO101Hardware:
                 raise ValueError(f"Invalid calibration for {name}.")
             span = (item["range_max"] - item["range_min"]) * 360 / 4095
             self.joint_limits[name] = (0.0, 100.0) if name == "gripper" else (-span / 2, span / 2)
+        self.rest_positions = self._rest_positions(config.get("rest_pose"))
         self.fields = {
             "type": fields["type"], "port": fields["port"], "id": fields["id"],
             "calibration_dir": str(calibration_dir), "cameras": {}, "use_degrees": True,
@@ -59,6 +63,15 @@ class SO101Hardware:
         }
         self.robot = None
         self.armed = False
+
+    def _rest_positions(self, rest_pose):
+        """Convert config rest_pose (normalized -100..100, gripper 0..100) to degrees, or None."""
+        if rest_pose is None:
+            return None
+        return {
+            name: rest_pose[name] if name == "gripper" else rest_pose[name] / 100 * self.joint_limits[name][1]
+            for name in JOINT_NAMES
+        }
 
     @property
     def connected(self):

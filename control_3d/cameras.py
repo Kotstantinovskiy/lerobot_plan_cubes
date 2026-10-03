@@ -16,7 +16,8 @@ import time
 CAMERA_NAMES = ("wrist", "top")
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 LOGGER = logging.getLogger(__name__)
-_OPENED_DEVICE = re.compile(r"^\[(?:avfoundation|AVFoundation indev) @ [^]]+\] '(.+)' opened$")
+# FFmpeg 8 logs the opened device under its input stream label instead of the demuxer name.
+_OPENED_DEVICE = re.compile(r"^\[(?:avfoundation|AVFoundation indev|in#\d+) @ [^]]+\] '(.+)' opened$")
 
 
 class JpegBuffer:

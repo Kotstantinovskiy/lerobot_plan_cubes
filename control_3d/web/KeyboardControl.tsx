@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { ViewerContext } from "../ViewerContext";
 import { computeT_threeworld_world } from "../WorldTransformUtils";
 import { useRemoteMode } from "./remoteMode";
+import { nextSequence } from "./sequence";
 
 type Direction = [number, number, number];
 type Props = { disabled: boolean; resetKey: string; onChange: (value: string) => void };
@@ -53,12 +54,11 @@ export default function KeyboardControl({ disabled, resetKey, onChange }: Props)
   latest.current = { disabled: blocked, connected, onChange, epoch: Number(resetKey) };
   const held = React.useRef(new Set<string>());
   const timer = React.useRef<ReturnType<typeof setInterval> | null>(null);
-  const sequence = React.useRef(0);
 
   const send = React.useCallback((direction: Direction) => {
     const state = latest.current;
     if (!Number.isSafeInteger(state.epoch) || state.epoch < 0) return;
-    state.onChange(JSON.stringify([...direction, ++sequence.current, state.epoch]));
+    state.onChange(JSON.stringify([...direction, nextSequence(), state.epoch]));
   }, []);
 
   const cancel = React.useCallback(() => {

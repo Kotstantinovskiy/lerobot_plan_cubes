@@ -14,7 +14,7 @@ from viser.extras import ViserUrdf
 import yourdfpy
 
 from cameras import CameraFeeds
-from controller import Controller
+from controller import RETURN_STOPPED_STATUS, RETURNING_STATUS, Controller
 from hardware import SO101Hardware
 from interaction import Interaction, MODES
 from kinematics import JOINT_NAMES, MODEL_PATH, Kinematics
@@ -34,7 +34,32 @@ STATUS_TEXT = {
     "Operator heartbeat lost; holding position": "Пульт неактивен. Движение остановлено.",
     "Control released; movement paused": "Управление передано. Движение приостановлено.",
     "Control layout changed; movement paused": "Экран управления изменён. Движение приостановлено.",
+    RETURNING_STATUS: "Рука возвращается на место",
 }
+# Refusals that the operator can resolve; unlike STATUS_TEXT, the panel always shows these.
+REFUSAL_TEXT = {
+    "Control error: Pose exceeds model or calibrated joint limits": "Поза вне пределов: поднимите руку",
+    "Control error: Gripper is below the minimum height": "Захват слишком низко: поднимите руку",
+    "Paused: arm is not following the commanded pose": "Рука не успела за командой: включите снова",
+    RETURN_STOPPED_STATUS: "Возврат остановлен: рука не успевает",
+}
+
+
+RISE_FIRST_TEXT = "Сначала поднимите захват вверх"
+
+
+def status_text(status):
+    """Return the operator-facing Russian text for a controller status, or the status itself."""
+    return REFUSAL_TEXT.get(status) or STATUS_TEXT.get(status, status)
+
+
+def remote_status_text(controller):
+    """Return the one line shown in the landscape remote header."""
+    if controller.faulted:
+        return "Ошибка связи"
+    if controller.enabled:
+        return RISE_FIRST_TEXT if controller.must_rise_first else "Управление включено"
+    return status_text(controller.status) if controller.connected else "Предпросмотр"
 
 
 def parse_args():
@@ -223,7 +248,7 @@ def run(args):
             return
         if isinstance(payload, dict):
             if (
-                set(payload) == {"action"} and isinstance(payload["action"], str)
+                set(payload) == {"action", "sequence"} and isinstance(payload["action"], str)
                 and payload["action"] in {"connect", "enable", "stop", "layout"}
             ):
                 submit(event.client_id, payload["action"])
@@ -256,10 +281,7 @@ def run(args):
             "connected": controller.connected,
             "enabled": controller.enabled,
             "faulted": controller.faulted,
-            "status": (
-                "Ошибка связи" if controller.faulted else "Управление включено" if controller.enabled
-                else "Пауза" if controller.connected else "Предпросмотр"
-            ),
+            "status": remote_status_text(controller),
         }, ensure_ascii=False)
         mode_dropdown.value = interaction.mode
         speed_slider.value = controller.speed
@@ -339,10 +361,14 @@ def run(args):
                     mode = "Пауза" if controller.connected else "Предпросмотр"
                     if controller.connected and controller.status == "Torque released":
                         mode = "Моторы отпущены"
+                    if controller.returning:
+                        mode = "Возврат на место"
                     state = "paused" if controller.connected else "preview"
                 detail = ""
                 if controller.faulted or controller.status not in STATUS_TEXT:
-                    detail = f'<p>{escape(STATUS_TEXT.get(controller.status, controller.status))}</p>'
+                    detail = f'<p>{escape(status_text(controller.status))}</p>'
+                elif controller.enabled and controller.must_rise_first:
+                    detail = f'<p>{RISE_FIRST_TEXT}</p>'
                 status.content = (
                     f'<div class="control-status is-{state}">'
                     f'<span class="control-status__label">{mode}</span>'

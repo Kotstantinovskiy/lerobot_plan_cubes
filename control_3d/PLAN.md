@@ -28,7 +28,8 @@ and the Mac motor connection can be reused without a native iOS USB driver.
 - Reuse calibration files without changing them or running calibration.
 - One controlling browser at a time; localhost by default, paired LAN optional.
 - Two optional camera previews share the viewer; failures never block motor control.
-- No dataset recording or autonomous motions.
+- No dataset recording or autonomous motions, except the return to the rest pose
+  after the operator disconnects.
 - Joint limits and a tool-height check do not replace collision planning.
 
 ## Verification boundary

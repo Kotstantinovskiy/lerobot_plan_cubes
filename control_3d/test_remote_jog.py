@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 
 from controller import Controller
-from kinematics import Kinematics
+from kinematics import JOINT_NAMES, Kinematics
 from remote_jog import RemoteJog
-from test_controller import FakeHardware
+from test_controller import REST_POSE, FakeHardware
 from test_keyboard_jog import Clock, point
 
 
@@ -180,10 +180,63 @@ def test_release_preserves_enabled_hardware_and_does_not_relax_a_loaded_grasp():
     assert hardware.sent[-1]["gripper"] == commanded_grip
 
 
+def test_stick_held_down_stops_at_the_height_limit_and_stays_active():
+    jog, controller, clock = remote()
+    advance(jog, controller, clock, (0, 0, -1, 0, 0), steps=330)
+    assert jog.active
+    assert point(controller)[2] == pytest.approx(controller.model.min_height, abs=0.003)
+    assert point(controller)[2] >= controller.model.min_height
+
+
+def remote_at_rest():
+    hardware = FakeHardware()
+    hardware.joint_limits = dict.fromkeys(JOINT_NAMES, (-106.0, 106.0))
+    hardware.positions.update(REST_POSE)
+    jog, controller, clock = remote(hardware)
+    controller.connect()
+    controller.enable()
+    return jog, controller, clock
+
+
+def test_stick_up_lifts_straight_out_of_the_rest_pose():
+    jog, controller, clock = remote_at_rest()
+    start = point(controller)
+    advance(jog, controller, clock, (0, 0, 1, 0, 0), steps=45)
+    assert controller.enabled
+    assert point(controller)[:2] == pytest.approx(start[:2], abs=0.001)
+    assert point(controller)[2] == pytest.approx(start[2] + 0.03, abs=0.001)
+
+
+def test_lift_from_rest_crosses_up_to_the_height_limit_without_a_jump():
+    jog, controller, clock = remote_at_rest()
+    previous_height = point(controller)[2]
+    for sequence in range(150):
+        assert jog.update(packet(jog, (0, 0, 1, 0, 0), sequence))
+        jog.tick(1 / 30)
+        controller.tick(1 / 30)
+        clock.advance(1 / 30)
+        height = point(controller)[2]
+        assert height - previous_height < 0.0015
+        previous_height = height
+    assert controller.enabled
+    assert point(controller)[2] > controller.model.min_height
+
+
+@pytest.mark.parametrize("rates", [(1, 0, 0, 0, 0), (0, 1, 0, 0, 0), (0, 0, -1, 0, 0)])
+def test_other_stick_directions_do_nothing_at_the_rest_pose(rates):
+    jog, controller, clock = remote_at_rest()
+    start = point(controller)
+    advance(jog, controller, clock, rates, steps=30)
+    assert controller.enabled
+    assert point(controller) == pytest.approx(start, abs=0.0005)
+
+
 def test_unreachable_translation_cancels_every_axis():
     jog, controller, clock = remote()
     jog.update(packet(jog, (0, 1, 0, 1, -1)))
-    controller.model.min_height = 0.5
+    def refuse_target(*args, **kwargs):
+        raise ValueError("Target is outside the workspace")
+    controller.model.solve = refuse_target
     with pytest.raises(ValueError):
         jog.tick(0.05)
     assert not jog.active

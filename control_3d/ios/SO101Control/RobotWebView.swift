@@ -10,7 +10,8 @@ struct RobotWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        configuration.applicationNameForUserAgent = "SO101Control/1.0"
+        // Keep the standard Mobile token: Viser's browser check recognizes a WebView by it.
+        configuration.applicationNameForUserAgent = "Mobile/15E148 SO101Control/1.0"
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.isOpaque = false

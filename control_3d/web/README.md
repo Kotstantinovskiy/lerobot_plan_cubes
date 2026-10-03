@@ -24,7 +24,12 @@ instrument focus, blur and disconnect cancel the input stream.
 `SessionHeartbeat.tsx` also gives the controlling tab a foreground lease. It
 does not claim ownership. Background, stale or interrupted heartbeats pause the
 operator and purge queued motion and enable requests; explicit handoff releases
-ownership while retaining the physical connection.
+ownership while retaining the physical connection. Heartbeats go straight to the
+WebSocket: Viser's GUI sender keeps only the latest message per 50 ms, so sharing
+it would lose clicks and starve the lease while a stick or dial is in use.
+`sequence.ts` numbers all input messages outside the components, because crossing
+Viser's 576 px mobile breakpoint, for example by rotating a phone, remounts the
+control panel and the server ignores numbers it has already passed.
 
 `RemoteControl.tsx` mounts through the standard `so101_remote` text component.
 Its normal panel contains the **Пульт** button and `CameraFeeds.tsx`; camera

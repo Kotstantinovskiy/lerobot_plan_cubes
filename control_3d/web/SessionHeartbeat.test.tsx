@@ -5,6 +5,7 @@ import { createRoot, Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ViewerContext } from "../ViewerContext";
 import SessionHeartbeat from "./SessionHeartbeat";
+import { resetSequenceForTests } from "./sequence";
 
 vi.mock("../ViewerContext", async () => {
   const react = await import("react");
@@ -21,6 +22,7 @@ describe("foreground operator heartbeat", () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
+    resetSequenceForTests();
     connected = true;
     hidden = false;
     vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
@@ -128,5 +130,14 @@ describe("foreground operator heartbeat", () => {
     event(window, "focus");
     event(document, "visibilitychange");
     expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps numbers rising when rotating the phone remounts the control panel", () => {
+    render();
+    act(() => vi.advanceTimersByTime(300));
+    act(() => root.render(<></>));
+    expect(lastPayload()).toEqual([5, false]);
+    render();
+    expect(lastPayload()).toEqual([6, true]);
   });
 });

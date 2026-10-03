@@ -43,6 +43,10 @@ requires an explicit reconnect and never automatically enables the motors.
 Manual Disconnect also clears the pairing link. After a server restart, scan
 the new QR code because the previous token is no longer valid.
 
+Five seconds after the last page or app disconnects, the Mac returns a held arm to
+its rest pose and frees the serial port. Leaving the app counts too, because that
+closes the control WebView; reconnect within five seconds to keep the arm in place.
+
 The usual sequence is to launch the Mac server, scan its code, then use Connect
 and Enable in the iPhone control room. Opening the QR panel on the Mac does not
 claim control. If the Mac browser already controls the arm, click **Передать

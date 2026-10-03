@@ -141,8 +141,14 @@ still starts with motors disabled. In the browser:
    geometry with small movements before relying on the displayed coordinates.
 3. Click **Включить движение**. The program validates the measured pose, writes
    that pose as the initial motor goal, then enables torque. Previous preview
-   targets are discarded. If the current pose is outside the allowed limits or
-   below the minimum tool height, enabling is refused.
+   targets are discarded. If the current pose is outside the calibrated joint
+   range, enabling is refused. The folded rest pose of `recording/rest.py` can be
+   enabled, although its shoulder and elbow are past the model limits: a joint
+   past a limit may only stay or move back. More than 10 mm below the minimum
+   height, as at the rest pose, the tool only lifts straight up, because the model
+   height says little about table clearance down there; the panel asks for this,
+   and other input does nothing. Closer to the minimum, where the arm sags while
+   holding, any target first brings the tool up to the minimum height.
 4. Drag the gripper nose in small steps, or use the optional XYZ handles. The
    display shows measured motor positions
    while connected. Joint speed, gripper speed, calibrated joint ranges, and
@@ -262,7 +268,8 @@ and touch testing on a physical iPhone still require Xcode.
   There is no external position measurement or automatic alignment to the table.
 - Minimum height applies to the tool frame, not the entire arm or its fingers.
   It is 15 mm above the model base plane by default. Set another value with
-  `--min-height-mm` only after checking the physical setup.
+  `--min-height-mm` only after checking the physical setup. The tool stops at
+  this height and motion stays enabled, so moving away needs no new command.
 - There is no collision planner or contact detection. The model does not include
   this setup's wrist camera, cables, objects, or mounting changes.
 - The gripper percentage is mapped approximately to the visual jaw angle. It
@@ -272,6 +279,13 @@ and touch testing on a physical iPhone still require Xcode.
   tool orientation is not supported.
 - Hard process termination, power loss, and a broken serial link cannot guarantee
   software cleanup or a motor stop.
+- **Отключиться** on a held arm, or 5 seconds with no page or phone connected,
+  returns the arm to `rest_pose` at 10 degrees per second and then frees the serial
+  port. From far out the tool rises to 100 mm, pulls back high, turns the base at a
+  folded pose, and folds. This is the one automatic motion. It has no collision
+  check, so keep the space above the table clear. Pressing **Стоп** or **Включить
+  движение** ends it; a joint lagging more than 12 degrees stops it and holds the
+  pose. Stopping the server itself still releases torque without returning.
 
 The bundled model's source revision, license, checksums, and geometric caveats
 are in [models/README.md](models/README.md).

@@ -71,7 +71,7 @@ def main():
         "TextInput.tsx", "KeyboardControl.tsx", "KeyboardControl.test.tsx",
         "SessionHeartbeat.tsx", "SessionHeartbeat.test.tsx",
         "CameraFeeds.tsx", "CameraFeeds.test.tsx",
-        "RemoteControl.tsx", "RemoteControl.test.tsx", "ThumbStick.tsx", "remoteMode.ts",
+        "RemoteControl.tsx", "RemoteControl.test.tsx", "ThumbStick.tsx", "remoteMode.ts", "sequence.ts",
     ):
         shutil.copy2(ROOT / "web" / name, client / "src" / "components" / name)
     for name in ("keyboardCameraMotion.ts", "keyboardCameraMotion.test.ts"):

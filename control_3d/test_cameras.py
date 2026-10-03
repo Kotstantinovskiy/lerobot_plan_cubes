@@ -127,6 +127,15 @@ def test_capture_command_uses_configured_name_without_numeric_fallback(config_pa
     assert "0:none" not in command
 
 
+@pytest.mark.parametrize(
+    "log_prefix",
+    ["[avfoundation @ 0x1]", "[AVFoundation indev @ 0x1]", "[in#0 @ 0x74ec20000]"],
+)
+def test_opened_device_line_is_recognized_across_ffmpeg_versions(log_prefix):
+    match = cameras._OPENED_DEVICE.fullmatch(f"{log_prefix} 'Sport Cam' opened")
+    assert match[1] == "Sport Cam"
+
+
 def test_jpeg_parser_handles_fragmented_markers_noise_and_multiple_frames():
     parser = JpegBuffer()
     assert parser.feed(b"unrelated bytes\xff") is None

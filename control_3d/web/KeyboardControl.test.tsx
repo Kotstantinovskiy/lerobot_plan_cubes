@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ViewerContext } from "../ViewerContext";
 import KeyboardControl, { keyboardDirection } from "./KeyboardControl";
 import { setRemoteMode } from "./remoteMode";
+import { resetSequenceForTests } from "./sequence";
 
 vi.mock("../ViewerContext", async () => {
   const react = await import("react");
@@ -88,6 +89,7 @@ describe("keyboard arm input lifecycle", () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
+    resetSequenceForTests();
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     connected = true;
     viewer = {

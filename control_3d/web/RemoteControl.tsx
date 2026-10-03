@@ -4,6 +4,7 @@ import { ViewerContext } from "../ViewerContext";
 import CameraFeeds from "./CameraFeeds";
 import ThumbStick, { StickValue } from "./ThumbStick";
 import { setRemoteMode, useRemoteMode } from "./remoteMode";
+import { nextSequence } from "./sequence";
 
 type RemoteState = {
   epoch: number;
@@ -40,7 +41,6 @@ export default function RemoteControl({ hint, onChange }: Props) {
   const right = React.useRef<StickValue>([0, 0]);
   const grip = React.useRef(0);
   const gripCapture = React.useRef<{ element: HTMLButtonElement; id: number } | null>(null);
-  const sequence = React.useRef(0);
   const timer = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const dialog = React.useRef<HTMLDialogElement>(null);
   const [resetKey, setResetKey] = React.useState(0);
@@ -54,7 +54,7 @@ export default function RemoteControl({ hint, onChange }: Props) {
     if (length > 1) { x /= length; y /= length; z /= length; }
     current.onChange(JSON.stringify([
       x, y, z, neutral ? 0 : right.current[0], neutral ? 0 : grip.current,
-      ++sequence.current, current.state.epoch,
+      nextSequence(), current.state.epoch,
     ]));
   }, []);
 
@@ -76,7 +76,8 @@ export default function RemoteControl({ hint, onChange }: Props) {
 
   const action = React.useCallback((name: "connect" | "enable" | "stop" | "layout") => {
     cancel();
-    if (latest.current.connected) latest.current.onChange(JSON.stringify({ action: name }));
+    // The number keeps a repeated press distinct: Viser ignores an unchanged value.
+    if (latest.current.connected) latest.current.onChange(JSON.stringify({ action: name, sequence: nextSequence() }));
   }, [cancel]);
 
   const switchLayout = React.useCallback((next: boolean, initial = false) => {

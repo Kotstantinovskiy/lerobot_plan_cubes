@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ViewerContext } from "../ViewerContext";
 import RemoteControl from "./RemoteControl";
 import { setRemoteMode } from "./remoteMode";
+import { resetSequenceForTests } from "./sequence";
 import { stickValue } from "./ThumbStick";
 
 vi.mock("../ViewerContext", async () => {
@@ -34,6 +35,7 @@ describe("landscape dual-thumb controller", () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.useFakeTimers();
+    resetSequenceForTests();
     connected = true;
     hidden = false;
     landscape = false;
@@ -105,11 +107,11 @@ describe("landscape dual-thumb controller", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
     click("Пульт");
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "layout" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
     expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).not.toBeNull();
     click("3D");
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "layout" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
     expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).toBeNull();
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
   });
@@ -145,7 +147,7 @@ describe("landscape dual-thumb controller", () => {
     advance(50);
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(values()[0]).toBeGreaterThan(0.8);
-    expect(last().slice(5)).toEqual([2, 0]);
+    expect(last().slice(5)).toEqual([3, 0]);
   });
 
   it("ignores touches outside the circular pads and never reassigns a held pointer", () => {
@@ -221,20 +223,29 @@ describe("landscape dual-thumb controller", () => {
     pointer("open", "pointerdown", 100, 100, 2);
     expect(onChange).not.toHaveBeenCalled();
     click("Подключить");
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "connect" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "connect" });
     render({ ...preview, hardware: true, connected: true, status: "Пауза" });
     click("Включить");
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "enable" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "enable" });
     render({ ...preview, hardware: true, connected: true, enabled: true, status: "Управление включено" });
     pointer("left", "pointerdown", 200, 100);
     expect(values()).toEqual([1, 0, 0, 0, 0]);
+  });
+
+  it("makes a repeated press a new message, because Viser ignores an unchanged value", () => {
+    enter({ ...preview, hardware: true, connected: true, status: "Пауза" });
+    click("Включить");
+    const firstPress = onChange.mock.lastCall![0];
+    click("Включить");
+    expect(onChange.mock.lastCall![0]).not.toBe(firstPress);
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "enable" });
   });
 
   it("clears input on stop, blur and visibility loss and never resumes old touches", () => {
     enter();
     pointer("left", "pointerdown", 200, 100);
     click("Стоп");
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "stop" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "stop" });
     const count = onChange.mock.calls.length;
     pointer("left", "pointermove", 200, 100);
     advance(100);
@@ -285,7 +296,7 @@ describe("landscape dual-thumb controller", () => {
     pointer("left", "pointerdown", 200, 100);
     landscape = false;
     act(() => orientationChanged!());
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "layout" });
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
     expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).toBeNull();
     landscape = true;
     act(() => orientationChanged!());
@@ -304,8 +315,8 @@ describe("landscape dual-thumb controller", () => {
     const cancelEvent = new Event("cancel", { cancelable: true });
     act(() => modal.dispatchEvent(cancelEvent));
     expect(cancelEvent.defaultPrevented).toBe(true);
-    expect(JSON.parse(onChange.mock.lastCall![0])).toEqual({ action: "layout" });
-    expect(onChange.mock.calls.map(([value]) => JSON.parse(value))).toContainEqual([0, 0, 0, 0, 0, 2, 0]);
+    expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
+    expect(onChange.mock.calls.map(([value]) => JSON.parse(value))).toContainEqual([0, 0, 0, 0, 0, 3, 0]);
     expect(closeModal).toHaveBeenCalledOnce();
     expect(document.querySelector("dialog")).toBeNull();
     const count = onChange.mock.calls.length;

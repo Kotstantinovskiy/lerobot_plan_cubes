@@ -3,6 +3,7 @@ import { TextInput, Textarea } from "@mantine/core";
 import { ViserInputComponent } from "./common";
 import { GuiTextMessage } from "../WebsocketMessages";
 import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
+import { ViewerContext } from "../ViewerContext";
 import KeyboardControl from "./KeyboardControl";
 import SessionHeartbeat from "./SessionHeartbeat";
 import CameraFeeds from "./CameraFeeds";
@@ -14,13 +15,18 @@ export default function TextInputComponent({
   props: { hint, label, disabled, visible, multiline },
 }: GuiTextMessage) {
   const { setValue } = React.useContext(GuiComponentContext)!;
+  const viewer = React.useContext(ViewerContext)!;
   if (!visible) return null;
   if (label === "so101_keyboard") {
     return <KeyboardControl disabled={disabled} resetKey={hint ?? "0"}
       onChange={(next) => setValue(uuid, next)}/>;
   }
   if (label === "so101_session") {
-    return <SessionHeartbeat onChange={(next) => setValue(uuid, next)}/>;
+    // setValue shares one throttled sender that keeps only the latest message, so heartbeats
+    // and commands would silently replace each other: lost clicks and false operator timeouts.
+    return <SessionHeartbeat onChange={(next) => viewer.mutable.current.sendMessage({
+      type: "GuiUpdateMessage", uuid, updates: { value: next },
+    })}/>;
   }
   if (label === "so101_cameras") {
     return <CameraFeeds/>;

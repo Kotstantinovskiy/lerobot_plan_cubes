@@ -18,6 +18,8 @@ MOTION = {"target", "gripper", "roll", "joint", "drag", "keyboard", "remote"}
 
 class Interaction:
     OPERATOR_TIMEOUT = 0.5
+    # With nobody connected this long the arm returns to rest; long enough to survive a page reload.
+    NOBODY_CONNECTED_SECONDS = 5.0
 
     def __init__(self, controller, clock=time.monotonic):
         self.controller = controller
@@ -31,6 +33,7 @@ class Interaction:
         self._heartbeats = {}
         self._owner_since = None
         self._heartbeat_stopped = False
+        self._nobody_since = None
         self._lock = threading.Lock()
 
     @property
@@ -59,6 +62,10 @@ class Interaction:
             return
         if kind == "heartbeat":
             with self._lock:
+                if client_id == self.owner and self._heartbeat_stopped:
+                    # Commands queued so far were issued while the operator was away. Anything
+                    # after this heartbeat is fresh, like the click that brought the page back.
+                    self._drop_owner_commands()
                 self._heartbeat_events.append((client_id, value, self.keyboard.clock()))
             return
         if kind in {"keyboard", "remote"}:
@@ -150,12 +157,15 @@ class Interaction:
             return self._owner_since is None or now - self._owner_since <= self.OPERATOR_TIMEOUT
         return state[1] and now - state[2] <= self.OPERATOR_TIMEOUT
 
+    def _drop_owner_commands(self):
+        self._events = deque(
+            event for event in self._events
+            if event[0] != self.owner or event[1] in {"stop", "yield"}
+        )
+
     def _discard_owner_commands(self):
         with self._lock:
-            self._events = deque(
-                event for event in self._events
-                if event[0] != self.owner or event[1] in {"stop", "yield"}
-            )
+            self._drop_owner_commands()
 
     def process(self, clients, dt=0.0):
         """Handle a bounded amount of input on the motor-control thread."""
@@ -175,8 +185,7 @@ class Interaction:
                 self._heartbeat_stopped = True
                 self._discard_owner_commands()
             elif self._heartbeat_stopped:
-                # Do not replay a command queued while the operator was absent.
-                self._discard_owner_commands()
+                # submit() already dropped commands queued while the operator was absent.
                 self._heartbeat_stopped = False
                 changed = True
         for _ in range(64):
@@ -187,6 +196,7 @@ class Interaction:
             changed = True
             if kind == "stop":
                 # The request remains valid if its browser closes immediately.
+                self.controller.cancel_return()
                 self.pause("Stopped; motors hold the current pose")
                 continue
             if client_id not in clients:
@@ -224,10 +234,35 @@ class Interaction:
         try:
             changed = self.keyboard.tick(dt) or changed
             changed = self.remote.tick(dt) or changed
+            changed = self._leave_if_nobody_connected(clients, now) or changed
+            changed = self.controller.tick_return(dt) or changed
         except Exception as error:
             self.pause(f"Control error: {error}")
             changed = True
         return changed
+
+    def _return_or_disconnect(self):
+        """Bring a held arm back to rest before freeing the port; an arm without torque needs no move."""
+        if self.controller.returning:
+            return
+        if self.controller.can_return_to_rest:
+            self.controller.start_return()
+        else:
+            self.controller.disconnect()
+
+    def _leave_if_nobody_connected(self, clients, now):
+        """Bring the arm back and free the port once nobody has been connected for a while."""
+        controller = self.controller
+        if clients or not controller.connected or controller.returning or controller.return_stopped:
+            self._nobody_since = None
+            return False
+        if self._nobody_since is None:
+            self._nobody_since = now
+        if now - self._nobody_since < self.NOBODY_CONNECTED_SECONDS:
+            return False
+        self._nobody_since = None
+        self._return_or_disconnect()
+        return True
 
     def _update_jog(self, kind, payload, received_at):
         jog = self.keyboard if kind == "keyboard" else self.remote
@@ -263,7 +298,7 @@ class Interaction:
         elif kind == "release":
             controller.release()
         elif kind == "disconnect":
-            controller.disconnect()
+            self._return_or_disconnect()
         elif kind == "yield":
             self.pause("Control released; movement paused")
             self._discard_owner_commands()

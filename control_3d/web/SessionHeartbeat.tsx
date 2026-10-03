@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ViewerContext } from "../ViewerContext";
+import { nextSequence } from "./sequence";
 
 type Props = { onChange: (value: string) => void };
 
@@ -9,7 +10,6 @@ export default function SessionHeartbeat({ onChange }: Props) {
   const connected = viewer.useGui((state) => state.websocketState === "connected");
   const latest = React.useRef({ connected, onChange });
   latest.current = { connected, onChange };
-  const sequence = React.useRef(0);
   const focused = React.useRef(true);
 
   React.useEffect(() => {
@@ -17,7 +17,7 @@ export default function SessionHeartbeat({ onChange }: Props) {
     let active = false;
 
     const send = (foreground: boolean) => {
-      latest.current.onChange(JSON.stringify([++sequence.current, foreground]));
+      latest.current.onChange(JSON.stringify([nextSequence(), foreground]));
     };
     const update = () => {
       const foreground = latest.current.connected && focused.current && !document.hidden;

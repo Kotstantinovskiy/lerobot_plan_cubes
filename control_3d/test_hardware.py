@@ -97,6 +97,23 @@ class HardwareTests(unittest.TestCase):
         self.assertTrue(fields["use_degrees"])
         self.assertEqual(fields["calibration_dir"], str(self.config_path.parent.resolve()))
 
+    def test_rest_pose_is_converted_from_normalized_units_to_degrees(self):
+        config = json.loads(self.config_path.read_text())
+        config["rest_pose"] = {**dict.fromkeys(JOINT_NAMES, 50.0), "gripper": 40.0}
+        self.config_path.write_text(json.dumps(config))
+        hardware = SO101Hardware(self.config_path)
+        half_span = hardware.joint_limits["elbow_flex"][1]
+        self.assertAlmostEqual(hardware.rest_positions["elbow_flex"], half_span / 2)
+        self.assertEqual(hardware.rest_positions["gripper"], 40.0)
+
+    def test_config_without_a_rest_pose_has_no_rest_positions(self):
+        self.assertIsNone(self.hardware.rest_positions)
+
+    def test_default_goal_step_leaves_the_elbow_enough_force_to_lift_the_arm(self):
+        self.hardware.connect()
+        fields = self.factory.call_args.args[0]
+        self.assertEqual(fields["max_relative_target"], 10.0)
+
     def test_arm_latches_latest_pose_before_torque(self):
         self.hardware.connect()
         self.robot.bus.positions["elbow_flex"] = 17.5

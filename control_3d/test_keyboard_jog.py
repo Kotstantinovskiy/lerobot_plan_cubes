@@ -158,7 +158,9 @@ def test_unreachable_step_cancels_input_and_disables_hardware_movement():
     controller.connect()
     controller.enable()
     jog.update(packet(jog, (0, 1, 0)))
-    controller.model.min_height = 0.5
+    def refuse_target(*args, **kwargs):
+        raise ValueError("Target is outside the workspace")
+    controller.model.solve = refuse_target
     with pytest.raises(ValueError, match="workspace"):
         jog.tick(1 / 30)
     assert not jog.active

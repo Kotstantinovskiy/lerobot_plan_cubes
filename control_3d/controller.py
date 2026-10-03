@@ -1,13 +1,31 @@
 """Single-threaded motion state shared by the browser and motor adapter."""
 
+from collections import deque
 import math
 
 import numpy as np
 
 try:
-    from .kinematics import JOINT_NAMES
+    from .kinematics import JOINT_NAMES, BelowMinimumHeight
+    from .rest_return import plan_return
 except ImportError:
-    from kinematics import JOINT_NAMES
+    from kinematics import JOINT_NAMES, BelowMinimumHeight
+    from rest_return import plan_return
+
+RETURNING_STATUS = "Returning to rest"
+RETURN_STOPPED_STATUS = "Return stopped: arm is not following"
+RETURN_SPEED_DEGREES_PER_SECOND = 10.0
+MAX_RETURN_LAG_DEGREES = 12.0
+# The folded arm catches up with its last command before the motors let go.
+RETURN_SETTLE_SECONDS = 1.0
+
+# Targets stop this far above the height limit, so solver rounding cannot cross it (metres).
+TARGET_HEIGHT_MARGIN = 0.001
+# The arm sags this far below the limit while holding; such a tool still moves normally (metres).
+SAG_ALLOWANCE = 0.010
+# Largest rise per target below the height limit, about 20 mm/s at the control rate: a jump would
+# leave the joints behind and trip the tracking check (metres).
+MAX_RISE_PER_TARGET = 0.0007
 
 
 class Controller:
@@ -30,6 +48,9 @@ class Controller:
         self._connection_expected = False
         self._faulted = False
         self.status = "Preview: no motor commands"
+        self._return_steps = None
+        self._return_command = None
+        self._return_settle_left = 0.0
 
     @property
     def connected(self):
@@ -104,6 +125,7 @@ class Controller:
             raise
 
     def enable(self):
+        self.cancel_return()
         self.enabled = False
         if not self.connected:
             if self._connection_expected:
@@ -114,11 +136,11 @@ class Controller:
         try:
             positions = self._read()
             self._sync(positions, gripper_command=held_gripper)
-            self.model.validate(self.angles)
+            self._check_start_pose()
             # The adapter reads once more and latches that exact pose before torque.
             positions = self.hardware.arm()
             self._sync(positions, gripper_command=held_gripper)
-            self.model.validate(self.angles)
+            self._check_start_pose()
         except ValueError as error:
             self._reject(error)
         except Exception as error:
@@ -175,6 +197,7 @@ class Controller:
 
     def release(self):
         """Release motor torque; the operator must support the physical arm."""
+        self.cancel_return()
         self.enabled = False
         self.target_angles = self.angles.copy()
         self.target_gripper = self.gripper
@@ -189,6 +212,7 @@ class Controller:
                 self._communication_error(error)
 
     def disconnect(self):
+        self.cancel_return()
         self.enabled = False
         if self._connection_expected:
             self.angles = self.measured_angles.copy()
@@ -216,9 +240,107 @@ class Controller:
         self.pause(f"Paused: {error}")
         raise ValueError(str(error)) from error
 
+    @property
+    def can_return_to_rest(self):
+        return self.connected and self.hardware.armed and self.hardware.rest_positions is not None
+
+    @property
+    def returning(self):
+        return self._return_steps is not None
+
+    @property
+    def return_stopped(self):
+        return self.status == RETURN_STOPPED_STATUS
+
+    def start_return(self):
+        """Hold the present pose, then walk to rest; tick_return() frees the port at the end."""
+        self.pause(RETURNING_STATUS)
+        self._return_steps = deque(plan_return(self.model, self.measured_angles, self.hardware.rest_positions))
+        self._return_command = self._positions(self.measured_angles, self.gripper)
+        self._return_settle_left = RETURN_SETTLE_SECONDS
+
+    def cancel_return(self):
+        self._return_steps = None
+
+    def tick_return(self, dt):
+        """Advance the return by one bounded step; return True when it has just ended."""
+        if self._return_steps is None:
+            return False
+        if self._faulted:
+            self.cancel_return()
+            return True
+        self.status = RETURNING_STATUS
+        measured = self._positions(self.measured_angles, self.measured_gripper)
+        lag = max(abs(measured[name] - self._return_command[name]) for name in JOINT_NAMES)
+        if lag > MAX_RETURN_LAG_DEGREES:
+            self.cancel_return()
+            self.pause(RETURN_STOPPED_STATUS)
+            return True
+        if not self._return_steps:
+            self._return_settle_left -= dt
+            if self._return_settle_left > 0:
+                return False
+            self.cancel_return()
+            self.disconnect()
+            return True
+        target = {**self._return_command, **self._return_steps[0]}
+        remaining = {name: target[name] - value for name, value in self._return_command.items()}
+        distance = max(abs(value) for value in remaining.values())
+        max_step = RETURN_SPEED_DEGREES_PER_SECOND * min(dt, 0.1)
+        fraction = 1.0 if distance <= max_step else max_step / distance
+        self._return_command = {
+            name: value + remaining[name] * fraction for name, value in self._return_command.items()
+        }
+        if fraction == 1.0:
+            self._return_steps.popleft()
+        try:
+            self.hardware.send_positions(self._return_command)
+        except Exception as error:
+            self.cancel_return()
+            self._communication_error(error)
+        return False
+
+    def _check_start_pose(self):
+        """Require only the calibrated range: the folded rest pose lies past the model limits."""
+        limits = np.deg2rad([self.hardware.joint_limits[name] for name in JOINT_NAMES])
+        is_within_range = np.all(self.angles >= limits[:, 0] - 1e-6) and np.all(self.angles <= limits[:, 1] + 1e-6)
+        if not is_within_range:
+            raise ValueError("Pose exceeds model or calibrated joint limits")
+
+    @property
+    def must_rise_first(self):
+        """True far below the height limit, as at the rest pose: only lifting straight up works."""
+        return self.model.forward(self.angles)[2, 3] < self.model.min_height - SAG_ALLOWANCE
+
+    def _apply_height_rules(self, position):
+        """Return the allowed version of a 3D target, or None when it should be ignored."""
+        tool = self.model.forward(self.angles)[:3, 3]
+        if self.must_rise_first:
+            # Model height says little about table clearance down here, so nothing moves sideways.
+            if position[2] <= tool[2]:
+                return None
+            position[:2] = tool[:2]
+        else:
+            # Reaching the height limit stops the tool there; it is not an error.
+            position[2] = max(position[2], self.model.min_height + TARGET_HEIGHT_MARGIN)
+        if tool[2] < self.model.min_height:
+            position[2] = min(position[2], tool[2] + MAX_RISE_PER_TARGET)
+        return position
+
     def set_target(self, position):
         try:
-            angles = self.model.solve(position, self.target_angles)
+            position = np.array(position, dtype=float)
+            if position.shape == (3,):
+                position = self._apply_height_rules(position)
+                if position is None:
+                    return
+            # Lifting out of a low pose with the wrist still moves the shoulder and elbow together:
+            # the elbow alone stalls raising the forearm against its weight.
+            angles = self.model.solve(
+                position, self.target_angles, current_angles=self.angles, keep_wrist_flex=self.must_rise_first,
+            )
+        except BelowMinimumHeight:
+            return
         except (ValueError, TypeError) as error:
             self._reject(error)
         self.target_angles = angles.copy()
@@ -227,7 +349,9 @@ class Controller:
 
     def set_joints(self, angles):
         try:
-            angles = self.model.validate(angles)
+            angles = self.model.validate(angles, current_angles=self.angles)
+        except BelowMinimumHeight:
+            return
         except (ValueError, TypeError) as error:
             self._reject(error)
         self.target_angles = angles.copy()
@@ -276,7 +400,10 @@ class Controller:
         angles = self.angles + np.clip(self.target_angles - self.angles, -max_step, max_step)
         gripper = self.gripper + float(np.clip(self.target_gripper - self.gripper, -25 * dt, 25 * dt))
         try:
-            self.model.validate(angles)
+            self.model.validate(angles, current_angles=self.angles)
+        except BelowMinimumHeight:
+            # Hold at the limit and keep control, so the operator can simply move away.
+            angles = self.angles
         except ValueError as error:
             self.pause(f"Paused: motion would leave the allowed workspace ({error})")
             return

@@ -14,6 +14,10 @@ JOINT_NAMES = (
 TOOL_FRAME = "gripper_frame_link"
 
 
+class BelowMinimumHeight(ValueError):
+    """The pose is within the joint limits, but the tool would be too low."""
+
+
 class Kinematics:
     def __init__(self, path=MODEL_PATH, min_height=0.015):
         root = ET.parse(path).getroot()
@@ -52,30 +56,53 @@ class Kinematics:
                 transform = transform @ rotation
         return transform
 
-    def validate(self, angles):
+    def validate(self, angles, *, current_angles=None):
+        """Check joint limits and tool height.
+
+        With current_angles, a pose already past a limit, as at the folded rest pose or after
+        sagging under the arm's weight, may stay there or move back but not go further out.
+        """
         angles = np.asarray(angles, dtype=float)
         if angles.shape != (5,) or not np.isfinite(angles).all():
             raise ValueError("Expected five finite joint angles")
-        if np.any(angles < self.lower - 1e-6) or np.any(angles > self.upper + 1e-6):
+        lower, upper, lowest_height = self.lower, self.upper, self.min_height
+        if current_angles is not None:
+            lower = np.minimum(lower, current_angles)
+            upper = np.maximum(upper, current_angles)
+            lowest_height = min(lowest_height, self.forward(current_angles)[2, 3])
+        if np.any(angles < lower - 1e-6) or np.any(angles > upper + 1e-6):
             raise ValueError("Pose exceeds model or calibrated joint limits")
-        if self.forward(angles)[2, 3] < self.min_height - 1e-6:
-            raise ValueError("Gripper is below the minimum height")
+        if self.forward(angles)[2, 3] < lowest_height - 1e-6:
+            raise BelowMinimumHeight("Gripper is below the minimum height")
         return angles
 
-    def solve(self, position, seed, wrist_roll=None):
-        """Solve near the current pose; reject targets more than 3 mm away."""
+    def solve(self, position, seed, wrist_roll=None, *, current_angles=None, keep_wrist_flex=False):
+        """Solve near the current pose; reject targets more than 3 mm away.
+
+        With current_angles, the solution may stay as far past a limit as that pose is.
+        With keep_wrist_flex, the wrist flex stays at its seed angle.
+        """
         position = np.asarray(position, dtype=float)
         if position.shape != (3,) or not np.isfinite(position).all():
             raise ValueError("Expected a finite 3D position")
-        if position[2] < self.min_height or np.linalg.norm(position) > 0.6:
+        lower, upper, lowest_height = self.lower, self.upper, self.min_height
+        if current_angles is not None:
+            lower = np.minimum(lower, current_angles)
+            upper = np.maximum(upper, current_angles)
+            lowest_height = min(lowest_height, self.forward(current_angles)[2, 3])
+        if position[2] < lowest_height or np.linalg.norm(position) > 0.6:
             raise ValueError("Target is outside the workspace")
         seed = np.asarray(seed, dtype=float)
         if seed.shape != (5,) or not np.isfinite(seed).all():
             raise ValueError("Expected five finite seed angles")
-        seed = np.clip(seed, self.lower, self.upper)
+        seed = np.clip(seed, lower, upper)
         roll = seed[4] if wrist_roll is None else float(wrist_roll)
-        if not np.isfinite(roll) or not self.lower[4] <= roll <= self.upper[4]:
+        if not np.isfinite(roll) or not lower[4] <= roll <= upper[4]:
             raise ValueError("Wrist roll exceeds joint limits")
+
+        if keep_wrist_flex:
+            lower, upper = lower.copy(), upper.copy()
+            lower[3], upper[3] = seed[3] - 1e-6, seed[3] + 1e-6
 
         def residual(values):
             angles = np.append(values, roll)
@@ -84,14 +111,14 @@ class Kinematics:
             return np.concatenate((error, 0.001 * (values - seed[:4])))
 
         result = least_squares(
-            residual, seed[:4], bounds=(self.lower[:4], self.upper[:4]),
+            residual, seed[:4], bounds=(lower[:4], upper[:4]),
             max_nfev=45, ftol=1e-5, xtol=1e-5, gtol=1e-7,
         )
         angles = np.append(result.x, roll)
         error = float(np.linalg.norm(self.forward(angles)[:3, 3] - position))
         if error > 0.003:
             raise ValueError(f"Target is unreachable (remaining error {error * 1000:.1f} mm)")
-        self.validate(angles)
+        self.validate(angles, current_angles=current_angles)
         return angles
 
     @staticmethod
