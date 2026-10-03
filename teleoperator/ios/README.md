@@ -1,4 +1,4 @@
-# SO-101 iPhone control
+# Teleoperator for iPhone
 
 A small native iOS app for the existing Mac controller. It scans or accepts the
 Mac pairing link, checks the authenticated `/health` endpoint, and displays the
@@ -9,10 +9,10 @@ kinematics and motion limits. The app requires iOS 16 or newer.
 
 1. Install the full Xcode application with an iOS SDK. Command Line Tools alone
    do not contain the iOS build tools or simulator.
-2. Open `SO101Control.xcodeproj` in Xcode.
-3. Under the SO101Control target, select your signing Team. Change
-   `local.so101.control` if your team requires another bundle identifier.
-4. Select an iPhone or iPhone Simulator and run the SO101Control scheme.
+2. Open `Teleoperator.xcodeproj` in Xcode.
+3. Under the Teleoperator target, select your signing Team. Change
+   `local.teleoperator` if your team requires another bundle identifier.
+4. Select an iPhone or iPhone Simulator and run the Teleoperator scheme.
 
 There are no package dependencies. The checked-in project and shared scheme are
 complete. A distribution app icon and App Store metadata are not included in
@@ -82,7 +82,7 @@ enablement again. Releasing a stick stops its
 motion; hiding the app, losing the connection, or rotating back to portrait also
 clears input. Returning to the foreground never resumes a held command.
 
-The WebView identifies the native app with the `SO101Control/1.0` user-agent
+The WebView identifies the native app with the `Teleoperator/1.0` user-agent
 marker. This selects the landscape interface only; pairing and command
 authorization still use the existing authenticated server connection.
 

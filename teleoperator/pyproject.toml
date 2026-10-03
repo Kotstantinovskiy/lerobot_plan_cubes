@@ -1,5 +1,5 @@
 [project]
-name = "so101-control-3d"
+name = "teleoperator"
 version = "0.1.0"
 description = "Local mouse control for a calibrated SO-101 arm on macOS"
 requires-python = ">=3.10"
@@ -19,4 +19,6 @@ dev = ["pytest>=8,<10"]
 package = false
 
 [tool.pytest.ini_options]
-testpaths = ["."]
+testpaths = ["tests"]
+# The app runs as plain scripts in this folder, so its modules import each other by bare name.
+pythonpath = [".", "tests"]

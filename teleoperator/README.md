@@ -1,14 +1,18 @@
-# SO-101 mouse control on macOS
+# Teleoperator
 
-A local browser scene for moving the SO-101 gripper with the mouse. Python
+Teleoperator is a local browser scene for moving the SO-101 gripper with the mouse. Python
 calculates the arm joint angles and, when explicitly enabled, sends bounded
 commands through the existing LeRobot installation. The implementation uses
 Viser, SciPy, and the bundled official SO-101 geometry. Normal launches need no
 frontend build, ROS installation, neural network, or GPU.
 
-`app.py` builds the viewer; `interaction.py` orders browser input and selects the
-operator; `controller.py` limits motion; `hardware.py` handles the USB connection.
-`cameras.py` independently supervises the two optional video previews.
+`app.py` starts everything and runs the control loop; `control_panel.py` builds the
+3D scene and the panel; `input_queue.py` collects browser input and `interaction.py`
+orders it and selects the operator; `controller.py` limits motion and `height_rules.py`
+holds its rules near the minimum height; `rest_return.py` plans the way back to rest;
+`keyboard_jog.py` and `remote_jog.py` share the input lease in `jog_lease.py`;
+`hardware.py` handles the USB connection. `cameras.py` independently supervises the two
+optional video previews. Tests are in `tests/`.
 
 The browser controls are in Russian. The implementation plan and scope are in
 [PLAN.md](PLAN.md).
@@ -19,10 +23,10 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/). From the
 repository root, run:
 
 ```bash
-uv run --project control_3d python control_3d/app.py
+uv run --project teleoperator python teleoperator/app.py
 ```
 
-Alternatively, launch `control_3d/run.sh` from any working directory. Open
+Alternatively, launch `teleoperator/run.sh` from any working directory. Open
 `http://127.0.0.1:8080` in the browser on the Mac.
 
 - Grab the nose of the gripper and drag it directly. The default mode has no
@@ -56,7 +60,7 @@ are rejected. A rejected target stops the current movement.
 Validate the model without starting a web server or opening serial ports:
 
 ```bash
-uv run --project control_3d python control_3d/app.py --check
+uv run --project teleoperator python teleoperator/app.py --check
 ```
 
 ## Camera previews
@@ -87,7 +91,7 @@ or extra pairing step. No video files are recorded. Camera requests pause while
 the control page is hidden or disconnected. To leave cameras entirely unopened:
 
 ```bash
-control_3d/run.sh --no-cameras
+teleoperator/run.sh --no-cameras
 ```
 
 `--check` also leaves all cameras unopened. Close other applications using a
@@ -100,8 +104,8 @@ Create a separate environment that can import those packages, then install the
 viewer dependencies into the separate environment:
 
 ```bash
-uv venv --python /path/to/existing/lerobot/bin/python --system-site-packages control_3d/.venv-robot
-uv pip install --python control_3d/.venv-robot/bin/python -r control_3d/requirements.txt
+uv venv --python /path/to/existing/lerobot/bin/python --system-site-packages teleoperator/.venv-robot
+uv pip install --python teleoperator/.venv-robot/bin/python -r teleoperator/requirements.txt
 ```
 
 Replace `/path/to/existing/lerobot/bin/python` with the actual interpreter path,
@@ -117,7 +121,7 @@ already be configured for position control and calibrated with LeRobot.
 First validate the configuration without opening the robot:
 
 ```bash
-control_3d/run.sh --hardware --check
+teleoperator/run.sh --hardware --check
 ```
 
 This checks the saved configuration and bundled model. It does not establish
@@ -127,7 +131,7 @@ model is physically aligned. Those checks require the assembled arm.
 ## Operate the real arm
 
 ```bash
-control_3d/run.sh --hardware
+teleoperator/run.sh --hardware
 ```
 
 The launcher does not install packages during a hardware launch. The server
@@ -189,13 +193,13 @@ control. The native app project and installation steps are in [ios/README.md](io
 For a preview without hardware:
 
 ```bash
-control_3d/run.sh --lan
+teleoperator/run.sh --lan
 ```
 
 For the real follower:
 
 ```bash
-control_3d/run.sh --hardware --lan
+teleoperator/run.sh --hardware --lan
 ```
 
 Open the desktop URL printed by the server. Under **Подключить iPhone**, scan the
@@ -207,7 +211,7 @@ The QR uses the Mac's `.local` hostname by default. If name resolution is not
 available on the network, supply the Mac's private Wi-Fi address:
 
 ```bash
-control_3d/run.sh --hardware --lan --address 192.168.1.10
+teleoperator/run.sh --hardware --lan --address 192.168.1.10
 ```
 
 Replace that example address with the Mac's actual address. Each launch creates
@@ -297,10 +301,10 @@ the optional browser client is described in [web/README.md](web/README.md).
 
 ```bash
 # Start on another local port at a lower joint speed.
-control_3d/run.sh --port 8081 --speed 10
+teleoperator/run.sh --port 8081 --speed 10
 
 # Run the model, controller, and fake motor-bus tests without hardware.
-uv run --project control_3d --group dev python -m pytest control_3d -q
+uv run --project teleoperator --group dev python -m pytest teleoperator -q
 ```
 
 ## Native iOS validation boundary

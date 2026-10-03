@@ -1,4 +1,4 @@
-# SO-101 mouse control
+# Teleoperator
 
 Build a small local application in this folder. A Python process serves a Viser
 browser interface and talks to the existing LeRobot motor driver over USB.

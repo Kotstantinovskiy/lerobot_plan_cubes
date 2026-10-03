@@ -31,7 +31,7 @@ it would lose clicks and starve the lease while a stick or dial is in use.
 Viser's 576 px mobile breakpoint, for example by rotating a phone, remounts the
 control panel and the server ignores numbers it has already passed.
 
-`RemoteControl.tsx` mounts through the standard `so101_remote` text component.
+`RemoteControl.tsx` mounts through the standard `teleoperator_remote` text component.
 Its normal panel contains the **Пульт** button and `CameraFeeds.tsx`; camera
 requests never send control commands. Wrist and overhead JPEGs use independent,
 sequential HTTP requests through the same authenticated gateway. Each feed
@@ -48,7 +48,7 @@ fixed robot-world X/Y directions, independently of 3D camera orbit: right is
 positive X and up is positive Y. On the right, up raises Z and right increases
 wrist roll. Camera mounting orientation is not automatically calibrated.
 
-Native iOS identifies its WebView with `SO101Control/1.0`; landscape widths of
+Native iOS identifies its WebView with `Teleoperator/1.0`; landscape widths of
 560 pixels or more open the remote automatically. A manual **Пульт** button is
 available for browser use. The interface switches camera placement without
 duplicating streams. Initial layout selection sends no commands; later mode
@@ -76,7 +76,7 @@ To edit the design, change `GripperControl.tsx` or `control-room.css`, then run
 this from the repository root with Node.js 24 or newer and npm installed:
 
 ```bash
-control_3d/.venv/bin/python control_3d/build_viewer.py
+teleoperator/.venv/bin/python teleoperator/build_viewer.py
 ```
 
 The build script copies the installed Viser client into the ignored

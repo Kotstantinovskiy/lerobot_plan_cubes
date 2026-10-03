@@ -1,51 +1,78 @@
 """Position kinematics for the bundled SO-101 model (metres and radians)."""
 
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
+from numpy.typing import ArrayLike
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
 MODEL_PATH = Path(__file__).parent / "models" / "so101_new_calib.urdf"
-JOINT_NAMES = (
-    "shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"
-)
+JOINT_NAMES = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 TOOL_FRAME = "gripper_frame_link"
+WRIST_FLEX_INDEX = 3
+WRIST_ROLL_INDEX = 4
+MAX_GRIPPER_OPENING = 100.0  # percent
+DEFAULT_MIN_HEIGHT = 0.015  # metres
+MAX_REACH = 0.6  # metres
+MAX_SOLVE_ERROR = 0.003  # metres
+ANGLE_TOLERANCE = 1e-6  # radians
+SEED_PREFERENCE_WEIGHT = 0.001
+MAX_SOLVER_EVALUATIONS = 45
+GRIPPER_ZERO_DEGREES = -10.0
+GRIPPER_DEGREES_PER_PERCENT = 1.1
 
 
-class BelowMinimumHeight(ValueError):
+class BelowMinimumHeightError(ValueError):
     """The pose is within the joint limits, but the tool would be too low."""
 
 
+def _parse_vector(text):
+    return np.fromstring(text, sep=" ")
+
+
+def _joint_origin(joint):
+    """Return the 4x4 transform of a URDF joint relative to its parent link."""
+    transform = np.eye(4)
+    origin = joint.find("origin")
+    if origin is None:
+        return transform
+    transform[:3, 3] = _parse_vector(origin.get("xyz", "0 0 0"))
+    transform[:3, :3] = Rotation.from_euler("xyz", _parse_vector(origin.get("rpy", "0 0 0"))).as_matrix()
+    return transform
+
+
+def _joint_axis(joint):
+    axis = joint.find("axis")
+    return np.zeros(3) if axis is None else _parse_vector(axis.get("xyz", "1 0 0"))
+
+
+def _load_chain(joints):
+    """Return (origin, axis, index in JOINT_NAMES or None) for each joint from the base to the tool."""
+    by_child = {joint.find("child").attrib["link"]: joint for joint in joints.values()}
+    chain = []
+    child = TOOL_FRAME
+    while child in by_child:
+        joint = by_child[child]
+        name = joint.attrib["name"]
+        index = JOINT_NAMES.index(name) if name in JOINT_NAMES else None
+        chain.append((_joint_origin(joint), _joint_axis(joint), index))
+        child = joint.find("parent").attrib["link"]
+    chain.reverse()
+    return chain
+
+
 class Kinematics:
-    def __init__(self, path=MODEL_PATH, min_height=0.015):
+    def __init__(self, path: Path = MODEL_PATH, min_height: float = DEFAULT_MIN_HEIGHT) -> None:
         root = ET.parse(path).getroot()
         joints = {joint.attrib["name"]: joint for joint in root.findall("joint")}
-        self.lower = np.array([float(joints[n].find("limit").attrib["lower"]) for n in JOINT_NAMES])
-        self.upper = np.array([float(joints[n].find("limit").attrib["upper"]) for n in JOINT_NAMES])
+        self.lower = np.array([float(joints[name].find("limit").attrib["lower"]) for name in JOINT_NAMES])
+        self.upper = np.array([float(joints[name].find("limit").attrib["upper"]) for name in JOINT_NAMES])
         self.min_height = min_height
-        by_child = {joint.find("child").attrib["link"]: joint for joint in joints.values()}
-        chain = []
-        child = TOOL_FRAME
-        while child in by_child:
-            joint = by_child[child]
-            origin = joint.find("origin")
-            transform = np.eye(4)
-            if origin is not None:
-                transform[:3, 3] = np.fromstring(origin.get("xyz", "0 0 0"), sep=" ")
-                transform[:3, :3] = Rotation.from_euler(
-                    "xyz", np.fromstring(origin.get("rpy", "0 0 0"), sep=" ")
-                ).as_matrix()
-            name = joint.attrib["name"]
-            index = JOINT_NAMES.index(name) if name in JOINT_NAMES else None
-            axis_node = joint.find("axis")
-            axis = np.fromstring(axis_node.get("xyz", "1 0 0"), sep=" ") if axis_node is not None else np.zeros(3)
-            chain.append((transform, axis, index))
-            child = joint.find("parent").attrib["link"]
-        self.chain = list(reversed(chain))
+        self.chain = _load_chain(joints)
 
-    def forward(self, angles):
+    def forward(self, angles: ArrayLike) -> np.ndarray:
         """Return the tool pose in the base frame."""
         transform = np.eye(4)
         for origin, axis, index in self.chain:
@@ -56,7 +83,17 @@ class Kinematics:
                 transform = transform @ rotation
         return transform
 
-    def validate(self, angles, *, current_angles=None):
+    def _allowed_range(self, current_angles):
+        """Return (lower, upper, lowest height), widened to include a pose already past a limit."""
+        if current_angles is None:
+            return self.lower, self.upper, self.min_height
+        return (
+            np.minimum(self.lower, current_angles),
+            np.maximum(self.upper, current_angles),
+            min(self.min_height, self.forward(current_angles)[2, 3]),
+        )
+
+    def validate(self, angles: ArrayLike, *, current_angles: np.ndarray | None = None) -> np.ndarray:
         """Check joint limits and tool height.
 
         With current_angles, a pose already past a limit, as at the folded rest pose or after
@@ -65,18 +102,22 @@ class Kinematics:
         angles = np.asarray(angles, dtype=float)
         if angles.shape != (5,) or not np.isfinite(angles).all():
             raise ValueError("Expected five finite joint angles")
-        lower, upper, lowest_height = self.lower, self.upper, self.min_height
-        if current_angles is not None:
-            lower = np.minimum(lower, current_angles)
-            upper = np.maximum(upper, current_angles)
-            lowest_height = min(lowest_height, self.forward(current_angles)[2, 3])
-        if np.any(angles < lower - 1e-6) or np.any(angles > upper + 1e-6):
+        lower, upper, lowest_height = self._allowed_range(current_angles)
+        if np.any(angles < lower - ANGLE_TOLERANCE) or np.any(angles > upper + ANGLE_TOLERANCE):
             raise ValueError("Pose exceeds model or calibrated joint limits")
-        if self.forward(angles)[2, 3] < lowest_height - 1e-6:
-            raise BelowMinimumHeight("Gripper is below the minimum height")
+        if self.forward(angles)[2, 3] < lowest_height - ANGLE_TOLERANCE:
+            raise BelowMinimumHeightError("Gripper is below the minimum height")
         return angles
 
-    def solve(self, position, seed, wrist_roll=None, *, current_angles=None, keep_wrist_flex=False):
+    def solve(
+        self,
+        position: ArrayLike,
+        seed: ArrayLike,
+        wrist_roll: float | None = None,
+        *,
+        current_angles: np.ndarray | None = None,
+        keep_wrist_flex: bool = False,
+    ) -> np.ndarray:
         """Solve near the current pose; reject targets more than 3 mm away.
 
         With current_angles, the solution may stay as far past a limit as that pose is.
@@ -85,45 +126,52 @@ class Kinematics:
         position = np.asarray(position, dtype=float)
         if position.shape != (3,) or not np.isfinite(position).all():
             raise ValueError("Expected a finite 3D position")
-        lower, upper, lowest_height = self.lower, self.upper, self.min_height
-        if current_angles is not None:
-            lower = np.minimum(lower, current_angles)
-            upper = np.maximum(upper, current_angles)
-            lowest_height = min(lowest_height, self.forward(current_angles)[2, 3])
-        if position[2] < lowest_height or np.linalg.norm(position) > 0.6:
+        lower, upper, lowest_height = self._allowed_range(current_angles)
+        if position[2] < lowest_height or np.linalg.norm(position) > MAX_REACH:
             raise ValueError("Target is outside the workspace")
         seed = np.asarray(seed, dtype=float)
         if seed.shape != (5,) or not np.isfinite(seed).all():
             raise ValueError("Expected five finite seed angles")
         seed = np.clip(seed, lower, upper)
-        roll = seed[4] if wrist_roll is None else float(wrist_roll)
-        if not np.isfinite(roll) or not lower[4] <= roll <= upper[4]:
+        roll = seed[WRIST_ROLL_INDEX] if wrist_roll is None else float(wrist_roll)
+        if not np.isfinite(roll) or not lower[WRIST_ROLL_INDEX] <= roll <= upper[WRIST_ROLL_INDEX]:
             raise ValueError("Wrist roll exceeds joint limits")
 
         if keep_wrist_flex:
             lower, upper = lower.copy(), upper.copy()
-            lower[3], upper[3] = seed[3] - 1e-6, seed[3] + 1e-6
+            lower[WRIST_FLEX_INDEX] = seed[WRIST_FLEX_INDEX] - ANGLE_TOLERANCE
+            upper[WRIST_FLEX_INDEX] = seed[WRIST_FLEX_INDEX] + ANGLE_TOLERANCE
+
+        angles = self._closest_angles(position, seed, roll, lower, upper)
+        error = float(np.linalg.norm(self.forward(angles)[:3, 3] - position))
+        if error > MAX_SOLVE_ERROR:
+            raise ValueError(f"Target is unreachable (remaining error {error * 1000:.1f} mm)")
+        self.validate(angles, current_angles=current_angles)
+        return angles
+
+    def _closest_angles(self, position, seed, roll, lower, upper):
+        """Return the five angles whose tool comes closest to position, with the wrist roll fixed."""
 
         def residual(values):
             angles = np.append(values, roll)
             error = self.forward(angles)[:3, 3] - position
             # A weak preference for the previous pose keeps the elbow continuous.
-            return np.concatenate((error, 0.001 * (values - seed[:4])))
+            return np.concatenate((error, SEED_PREFERENCE_WEIGHT * (values - seed[:WRIST_ROLL_INDEX])))
 
         result = least_squares(
-            residual, seed[:4], bounds=(lower[:4], upper[:4]),
-            max_nfev=45, ftol=1e-5, xtol=1e-5, gtol=1e-7,
+            residual,
+            seed[:WRIST_ROLL_INDEX],
+            bounds=(lower[:WRIST_ROLL_INDEX], upper[:WRIST_ROLL_INDEX]),
+            max_nfev=MAX_SOLVER_EVALUATIONS,
+            ftol=1e-5,
+            xtol=1e-5,
+            gtol=1e-7,
         )
-        angles = np.append(result.x, roll)
-        error = float(np.linalg.norm(self.forward(angles)[:3, 3] - position))
-        if error > 0.003:
-            raise ValueError(f"Target is unreachable (remaining error {error * 1000:.1f} mm)")
-        self.validate(angles, current_angles=current_angles)
-        return angles
+        return np.append(result.x, roll)
 
     @staticmethod
-    def visual_config(angles, gripper):
+    def visual_config(angles: np.ndarray, gripper: float) -> dict[str, float]:
         """Jaw percentage is only approximately mapped to the visual joint."""
-        config = dict(zip(JOINT_NAMES, map(float, angles)))
-        config["gripper"] = float(np.deg2rad(-10 + 1.1 * gripper))
+        config = dict(zip(JOINT_NAMES, map(float, angles), strict=False))
+        config["gripper"] = float(np.deg2rad(GRIPPER_ZERO_DEGREES + GRIPPER_DEGREES_PER_PERCENT * gripper))
         return config

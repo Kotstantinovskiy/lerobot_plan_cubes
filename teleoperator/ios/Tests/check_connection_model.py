@@ -1,11 +1,12 @@
 """Exercise the native connection model against an isolated local HTTP fixture."""
 
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import contextlib
 import json
 import subprocess
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -26,15 +27,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         time.sleep(0.3 if token.startswith("slow") else 0.05)
-        body = json.dumps({"name": "SO-101", "version": 1}).encode()
+        body = json.dumps({"name": "Teleoperator", "version": 1}).encode()
         self.send_response(401 if token.startswith("bad") else 200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        try:
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
 
     def log_message(self, format, *args):
         pass

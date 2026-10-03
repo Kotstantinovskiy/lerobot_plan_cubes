@@ -112,7 +112,7 @@ export default function RemoteControl({ hint, onChange }: Props) {
   }, [cancel]);
 
   React.useEffect(() => {
-    if (!navigator.userAgent.includes("SO101Control/1.0")) return;
+    if (!navigator.userAgent.includes("Teleoperator/1.0")) return;
     const landscape = window.matchMedia("(orientation: landscape) and (min-width: 560px)");
     switchLayout(landscape.matches, true);
     const changed = () => switchLayout(landscape.matches);
@@ -174,11 +174,11 @@ export default function RemoteControl({ hint, onChange }: Props) {
     <CameraFeeds/>
   </>;
 
-  return createPortal(<dialog ref={dialog} className="remote-control" aria-label="Пульт управления SO-101"
+  return createPortal(<dialog ref={dialog} className="remote-control" aria-label="Пульт Teleoperator"
     aria-modal="true" onCancel={(event) => { event.preventDefault(); switchLayout(false); }}>
     <header className="remote-control__header">
       <button type="button" className="remote-button remote-back" onClick={() => switchLayout(false)}>3D</button>
-      <div className="remote-control__status"><strong>SO—101</strong>
+      <div className="remote-control__status"><strong>Teleoperator</strong>
         <span role="status">{connected ? state?.status ?? "Пульт недоступен" : "Нет связи"}</span></div>
       <div className="remote-control__actions">
         {state?.hardware && !state.connected && <button type="button" className="remote-button"

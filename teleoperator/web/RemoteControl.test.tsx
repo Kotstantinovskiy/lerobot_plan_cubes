@@ -109,10 +109,10 @@ describe("landscape dual-thumb controller", () => {
     click("Пульт");
     expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
-    expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Пульт Teleoperator"]')).not.toBeNull();
     click("3D");
     expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
-    expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Пульт Teleoperator"]')).toBeNull();
     expect(document.querySelectorAll('[aria-label^="Камера:"]')).toHaveLength(2);
   });
 
@@ -288,16 +288,16 @@ describe("landscape dual-thumb controller", () => {
   });
 
   it("opens automatically in native landscape without sending a mount command and resets on rotation", () => {
-    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("WKWebView SO101Control/1.0");
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("WKWebView Teleoperator/1.0");
     landscape = true;
     render();
-    expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Пульт Teleoperator"]')).not.toBeNull();
     expect(onChange).not.toHaveBeenCalled();
     pointer("left", "pointerdown", 200, 100);
     landscape = false;
     act(() => orientationChanged!());
     expect(JSON.parse(onChange.mock.lastCall![0])).toMatchObject({ action: "layout" });
-    expect(document.querySelector('[aria-label="Пульт управления SO-101"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Пульт Teleoperator"]')).toBeNull();
     landscape = true;
     act(() => orientationChanged!());
     const count = onChange.mock.calls.length;

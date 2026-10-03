@@ -6,7 +6,6 @@ import { GuiComponentContext } from "../ControlPanel/GuiComponentContext";
 import { ViewerContext } from "../ViewerContext";
 import KeyboardControl from "./KeyboardControl";
 import SessionHeartbeat from "./SessionHeartbeat";
-import CameraFeeds from "./CameraFeeds";
 import RemoteControl from "./RemoteControl";
 
 export default function TextInputComponent({
@@ -17,21 +16,18 @@ export default function TextInputComponent({
   const { setValue } = React.useContext(GuiComponentContext)!;
   const viewer = React.useContext(ViewerContext)!;
   if (!visible) return null;
-  if (label === "so101_keyboard") {
+  if (label === "teleoperator_keyboard") {
     return <KeyboardControl disabled={disabled} resetKey={hint ?? "0"}
       onChange={(next) => setValue(uuid, next)}/>;
   }
-  if (label === "so101_session") {
+  if (label === "teleoperator_session") {
     // setValue shares one throttled sender that keeps only the latest message, so heartbeats
     // and commands would silently replace each other: lost clicks and false operator timeouts.
     return <SessionHeartbeat onChange={(next) => viewer.mutable.current.sendMessage({
       type: "GuiUpdateMessage", uuid, updates: { value: next },
     })}/>;
   }
-  if (label === "so101_cameras") {
-    return <CameraFeeds/>;
-  }
-  if (label === "so101_remote") {
+  if (label === "teleoperator_remote") {
     return <RemoteControl hint={hint ?? ""} onChange={(next) => setValue(uuid, next)}/>;
   }
   return (

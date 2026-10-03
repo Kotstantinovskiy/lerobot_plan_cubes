@@ -34,7 +34,7 @@ struct ConnectionModelTests {
         model.urlText = link("redirect")
         model.connect()
         try await settle()
-        precondition(model.endpoint == nil && model.message?.contains("контроллера SO-101") == true, "Health redirect was accepted")
+        precondition(model.endpoint == nil && model.message?.contains("сервера Teleoperator") == true, "Health redirect was accepted")
 
         model.urlText = link("slow")
         model.connect()

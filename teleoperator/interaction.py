@@ -1,19 +1,44 @@
 """Ordered browser input and ownership, independent of the viewer."""
 
-from collections import deque
 import json
-import threading
 import time
+from collections.abc import Callable, Collection
+from typing import Any, NamedTuple
 
 import numpy as np
 
+from controller import Controller
 from drag import DragTarget
+from input_queue import MOTION, TRANSITIONS, HeartbeatArrival, InputEvent, InputQueue
+from jog_lease import MAX_MESSAGE_NUMBER
 from keyboard_jog import KeyboardJog
+from kinematics import WRIST_ROLL_INDEX
 from remote_jog import RemoteJog
 
 MODES = ("Тянуть захват", "Оси XYZ")
-TRANSITIONS = {"connect", "enable", "stop", "release", "disconnect", "sync", "mode", "yield", "layout"}
-MOTION = {"target", "gripper", "roll", "joint", "drag", "keyboard", "remote"}
+JOG_INPUTS = {"keyboard", "remote"}
+# These pause, and a pause cancels the jogs by itself.
+PAUSING_TRANSITIONS = {"sync", "mode", "yield", "layout"}
+MAX_EVENTS_PER_PROCESS = 64
+
+
+class Heartbeat(NamedTuple):
+    sequence: int
+    is_active: bool
+    received_at: float
+
+
+def _parse_heartbeat(payload):
+    """Return (sequence, is_active) from a heartbeat message, or None if it is malformed."""
+    try:
+        sequence, is_active = json.loads(payload) if isinstance(payload, str) else payload
+    except (TypeError, ValueError):
+        return None
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or not 0 <= sequence < MAX_MESSAGE_NUMBER:
+        return None
+    if not isinstance(is_active, bool):
+        return None
+    return sequence, is_active
 
 
 class Interaction:
@@ -21,92 +46,63 @@ class Interaction:
     # With nobody connected this long the arm returns to rest; long enough to survive a page reload.
     NOBODY_CONNECTED_SECONDS = 5.0
 
-    def __init__(self, controller, clock=time.monotonic):
+    def __init__(self, controller: Controller, clock: Callable[[], float] = time.monotonic) -> None:
         self.controller = controller
         self.owner = None
         self.direct_mode = True
         self.drag = DragTarget()
         self.keyboard = KeyboardJog(controller, clock)
         self.remote = RemoteJog(controller, clock)
-        self._events = deque()
-        self._heartbeat_events = deque()
+        self._clock = clock
+        self._queue = InputQueue()
         self._heartbeats = {}
         self._owner_since = None
         self._heartbeat_stopped = False
         self._nobody_since = None
-        self._lock = threading.Lock()
 
     @property
-    def mode(self):
+    def mode(self) -> str:
         return MODES[0 if self.direct_mode else 1]
 
     @property
-    def keyboard_epoch(self):
+    def keyboard_epoch(self) -> int:
         return self.keyboard.epoch
 
     @property
-    def keyboard_active(self):
+    def keyboard_active(self) -> bool:
         return self.keyboard.active
 
     @property
-    def remote_epoch(self):
+    def remote_epoch(self) -> int:
         return self.remote.epoch
 
     @property
-    def remote_active(self):
+    def remote_active(self) -> bool:
         return self.remote.active
 
-    def submit(self, client_id, kind, value=None):
+    def submit(self, client_id: int | None, kind: str, value: Any = None) -> None:
         """Collect input; only process() may touch the controller or motors."""
         if client_id is None:
             return
         if kind == "heartbeat":
-            with self._lock:
-                if client_id == self.owner and self._heartbeat_stopped:
-                    # Commands queued so far were issued while the operator was away. Anything
-                    # after this heartbeat is fresh, like the click that brought the page back.
-                    self._drop_owner_commands()
-                self._heartbeat_events.append((client_id, value, self.keyboard.clock()))
+            self._submit_heartbeat(client_id, value)
             return
-        if kind in {"keyboard", "remote"}:
-            value = (value, self.keyboard.clock())
-        with self._lock:
-            authorized = self.owner is None or self.owner == client_id
-            if kind == "stop":
-                # A stop must also discard a queued enable or an old drag start.
-                self._events.clear()
-                self._events.appendleft((client_id, kind, value))
-                return
-            if authorized and kind in TRANSITIONS:
-                self._events = deque(
-                    event for event in self._events
-                    if event[0] != client_id or event[1] not in MOTION
-                )
-            key = self._continuous_key(client_id, kind, value)
-            if authorized and key is not None:
-                # Remove and append, so retained inputs keep their arrival order.
-                for index in range(len(self._events) - 1, -1, -1):
-                    previous = self._events[index]
-                    if previous[1] in TRANSITIONS or self._drag_boundary(previous):
-                        break
-                    if self._continuous_key(*previous) == key:
-                        del self._events[index]
-                        break
-            self._events.append((client_id, kind, value))
+        if kind in JOG_INPUTS:
+            value = (value, self._clock())
+        event = InputEvent(client_id, kind, value)
+        if kind == "stop":
+            self._queue.put_stop(event)
+        else:
+            self._queue.put(event, is_authorized=self.owner is None or self.owner == client_id)
 
-    @staticmethod
-    def _drag_boundary(event):
-        return event[1] == "drag" and event[2][1] != "update"
+    def _submit_heartbeat(self, client_id, payload):
+        if client_id == self.owner and self._heartbeat_stopped:
+            # Commands queued so far were issued while the operator was away. Anything
+            # after this heartbeat is fresh, like the click that brought the page back.
+            self._queue.drop_commands_of(self.owner)
+        self._queue.put_heartbeat(HeartbeatArrival(client_id, payload, self._clock()))
 
-    @staticmethod
-    def _continuous_key(client_id, kind, value):
-        if kind == "drag":
-            return (client_id, kind, value[0]) if value[1] == "update" else None
-        if kind in {"target", "gripper", "roll", "speed", "joint", "keyboard", "remote"}:
-            return (client_id, kind, value[0] if kind == "joint" else None)
-        return None
-
-    def pause(self, reason):
+    def pause(self, reason: str) -> None:
         """Forget active gestures even when a hardware hold fails."""
         self.drag.clear()
         self.keyboard.cancel()
@@ -118,128 +114,132 @@ class Interaction:
             self.controller.status = f"{reason}; hold failed: {error}"
 
     def _read_heartbeats(self, clients):
-        """Read foreground leases before commands, retaining inactive transitions."""
-        with self._lock:
-            events = list(self._heartbeat_events)
-            self._heartbeat_events.clear()
-        now = self.keyboard.clock()
+        """Read foreground leases before commands; return (did the owner stop, current time)."""
+        arrivals = self._queue.take_heartbeats()
+        now = self._clock()
         self._heartbeats = {client: state for client, state in self._heartbeats.items() if client in clients}
         stop_owner = False
-        for client, payload, received_at in events:
-            if client not in clients:
+        for client, payload, received_at in arrivals:
+            parsed = _parse_heartbeat(payload) if client in clients else None
+            if parsed is None:
                 continue
-            try:
-                sequence, active = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, ValueError):
-                continue
-            if isinstance(sequence, bool) or not isinstance(sequence, int) or not 0 <= sequence < 2**53:
-                continue
-            if not isinstance(active, bool):
-                continue
+            sequence, is_active = parsed
             previous = self._heartbeats.get(client)
-            if previous is not None and sequence <= previous[0]:
+            if previous is not None and sequence <= previous.sequence:
                 continue
             if not 0 <= now - received_at <= self.OPERATOR_TIMEOUT:
                 continue
-            if client == self.owner:
-                baseline = previous[2] if previous is not None else self._owner_since
-                if not active or (
-                    not self._heartbeat_stopped and baseline is not None
-                    and received_at - baseline > self.OPERATOR_TIMEOUT
-                ):
-                    stop_owner = True
-            self._heartbeats[client] = (sequence, active, received_at)
+            if client == self.owner and self._owner_went_away(previous, is_active, received_at):
+                stop_owner = True
+            self._heartbeats[client] = Heartbeat(sequence, is_active, received_at)
         return stop_owner, now
 
+    def _owner_went_away(self, previous, is_active, received_at):
+        """Return whether a heartbeat says the owner left or reveals a gap since the last one."""
+        if not is_active:
+            return True
+        baseline = previous.received_at if previous is not None else self._owner_since
+        has_gap = baseline is not None and received_at - baseline > self.OPERATOR_TIMEOUT
+        return has_gap and not self._heartbeat_stopped
+
     def _foreground(self, client, now):
-        state = self._heartbeats.get(client)
-        if state is None:
+        heartbeat = self._heartbeats.get(client)
+        if heartbeat is None:
             return self._owner_since is None or now - self._owner_since <= self.OPERATOR_TIMEOUT
-        return state[1] and now - state[2] <= self.OPERATOR_TIMEOUT
+        return heartbeat.is_active and now - heartbeat.received_at <= self.OPERATOR_TIMEOUT
 
-    def _drop_owner_commands(self):
-        self._events = deque(
-            event for event in self._events
-            if event[0] != self.owner or event[1] in {"stop", "yield"}
-        )
+    def _forget_owner(self):
+        self.owner = None
+        self._owner_since = None
+        self._heartbeat_stopped = False
 
-    def _discard_owner_commands(self):
-        with self._lock:
-            self._drop_owner_commands()
+    def _take_ownership(self, client_id, now):
+        self.owner = client_id
+        self._owner_since = now
 
-    def process(self, clients, dt=0.0):
-        """Handle a bounded amount of input on the motor-control thread."""
-        changed = False
+    def process(self, clients: Collection[int], dt: float = 0.0) -> bool:
+        """Handle a bounded amount of input on the motor-control thread; return whether anything changed."""
         stop_owner, now = self._read_heartbeats(clients)
-        if self.owner is not None and self.owner not in clients:
+        changed = self._check_owner_presence(clients, stop_owner, now)
+        for _ in range(MAX_EVENTS_PER_PROCESS):
+            event = self._queue.pop()
+            if event is None:
+                break
+            changed = True
+            self._handle_event(event, clients, now)
+        return self._advance_motion(clients, now, dt) or changed
+
+    def _check_owner_presence(self, clients, stop_owner, now):
+        """Pause when the owner left or went to the background; return whether anything changed."""
+        if self.owner is None:
+            return False
+        if self.owner not in clients:
             self.pause("Operator disconnected; holding position")
-            self.owner = None
-            self._owner_since = None
-            self._heartbeat_stopped = False
-            changed = True
-        if self.owner is not None:
-            if stop_owner or not self._foreground(self.owner, now):
-                if not self._heartbeat_stopped:
-                    self.pause("Operator heartbeat lost; holding position")
-                    changed = True
-                self._heartbeat_stopped = True
-                self._discard_owner_commands()
-            elif self._heartbeat_stopped:
-                # submit() already dropped commands queued while the operator was absent.
-                self._heartbeat_stopped = False
-                changed = True
-        for _ in range(64):
-            with self._lock:
-                if not self._events:
-                    break
-                client_id, kind, value = self._events.popleft()
-            changed = True
-            if kind == "stop":
-                # The request remains valid if its browser closes immediately.
-                self.controller.cancel_return()
-                self.pause("Stopped; motors hold the current pose")
-                continue
-            if client_id not in clients:
-                continue
-            if kind in {"yield", "layout"} and client_id != self.owner:
-                continue
-            if self.owner is not None and self.owner != client_id and kind != "stop":
-                continue
-            if self.owner is None and kind != "stop":
-                if not self._foreground(client_id, now):
-                    continue
-                if kind in {"keyboard", "remote"}:
-                    payload, received_at = value
-                    try:
-                        payload = json.loads(payload) if isinstance(payload, str) else payload
-                        rate_count = 3 if kind == "keyboard" else 5
-                        if not isinstance(payload, (list, tuple)) or len(payload) != rate_count + 2 or not any(payload[:rate_count]):
-                            continue
-                        if not self._update_jog(kind, payload, received_at):
-                            continue
-                    except (TypeError, ValueError):
-                        continue
-                    except Exception as error:
-                        self.pause(f"Control error: {error}")
-                        continue
-                    self.owner = client_id
-                    self._owner_since = now
-                    continue
-                self.owner = client_id
-                self._owner_since = now
-            try:
-                self._apply(client_id, kind, value)
-            except Exception as error:
-                self.pause(f"Control error: {error}")
+            self._forget_owner()
+            return True
+        was_stopped = self._heartbeat_stopped
+        if stop_owner or not self._foreground(self.owner, now):
+            if not was_stopped:
+                self.pause("Operator heartbeat lost; holding position")
+            self._heartbeat_stopped = True
+            self._queue.drop_commands_of(self.owner)
+            return not was_stopped
+        # submit() already dropped commands queued while the operator was absent.
+        self._heartbeat_stopped = False
+        return was_stopped
+
+    def _handle_event(self, event, clients, now):
+        client_id, kind, value = event
+        if kind == "stop":
+            # The request remains valid if its browser closes immediately.
+            self.controller.cancel_return()
+            self.pause("Stopped; motors hold the current pose")
+            return
+        if client_id not in clients:
+            return
+        if kind in {"yield", "layout"} and client_id != self.owner:
+            return
+        if self.owner is not None and self.owner != client_id:
+            return
+        if self.owner is None:
+            if not self._foreground(client_id, now):
+                return
+            if kind in JOG_INPUTS:
+                self._claim_with_jog(event, now)
+                return
+            self._take_ownership(client_id, now)
         try:
-            changed = self.keyboard.tick(dt) or changed
-            changed = self.remote.tick(dt) or changed
-            changed = self._leave_if_nobody_connected(clients, now) or changed
-            changed = self.controller.tick_return(dt) or changed
+            self._apply(client_id, kind, value)
         except Exception as error:
             self.pause(f"Control error: {error}")
-            changed = True
-        return changed
+
+    def _claim_with_jog(self, event, now):
+        """Give the arm to the sender of a jog message only if that message really starts motion."""
+        client_id, kind, (payload, received_at) = event
+        rate_count = self._jog(kind).RATE_COUNT
+        try:
+            payload = json.loads(payload) if isinstance(payload, str) else payload
+            has_rates = isinstance(payload, (list, tuple)) and len(payload) == rate_count + 2
+            if not has_rates or not any(payload[:rate_count]) or not self._update_jog(kind, payload, received_at):
+                return
+        except (TypeError, ValueError):
+            return
+        except Exception as error:
+            self.pause(f"Control error: {error}")
+            return
+        self._take_ownership(client_id, now)
+
+    def _advance_motion(self, clients, now, dt):
+        """Advance ongoing motion by one control step; return whether anything changed."""
+        try:
+            keyboard_changed = self.keyboard.tick(dt)
+            remote_changed = self.remote.tick(dt)
+            nobody_changed = self._leave_if_nobody_connected(clients, now)
+            return_changed = self.controller.tick_return(dt)
+        except Exception as error:
+            self.pause(f"Control error: {error}")
+            return True
+        return keyboard_changed or remote_changed or nobody_changed or return_changed
 
     def _return_or_disconnect(self):
         """Bring a held arm back to rest before freeing the port; an arm without torque needs no move."""
@@ -264,73 +264,84 @@ class Interaction:
         self._return_or_disconnect()
         return True
 
+    def _jog(self, kind):
+        return self.keyboard if kind == "keyboard" else self.remote
+
     def _update_jog(self, kind, payload, received_at):
-        jog = self.keyboard if kind == "keyboard" else self.remote
+        jog = self._jog(kind)
         other = self.remote if kind == "keyboard" else self.keyboard
         was_active = jog.active
         accepted = jog.update(payload, received_at)
         if accepted and jog.active:
             self.drag.clear()
             if not was_active:
-                other.cancel(hold=True)
+                other.cancel_and_hold()
         return accepted
 
     def _apply(self, client_id, kind, value):
-        controller = self.controller
-        if kind in {"keyboard", "remote"}:
+        if kind in JOG_INPUTS:
             payload, received_at = value
             self._update_jog(kind, payload, received_at)
-            return
-        if kind in TRANSITIONS:
-            self.drag.clear()
-            if kind not in {"stop", "sync", "mode", "yield", "layout"}:
-                self.keyboard.cancel()
-                self.remote.cancel()
-        elif kind in MOTION:
-            self.keyboard.cancel(hold=True)
-            self.remote.cancel(hold=True)
+        elif kind in TRANSITIONS:
+            self._apply_transition(kind, value)
+        else:
+            self._apply_command(client_id, kind, value)
+
+    def _apply_transition(self, kind, value):
+        self.drag.clear()
+        if kind not in PAUSING_TRANSITIONS:
+            self.keyboard.cancel()
+            self.remote.cancel()
         if kind == "connect":
-            controller.connect()
+            self.controller.connect()
         elif kind == "enable":
-            controller.enable()
-        elif kind == "stop":
-            self.pause("Stopped; motors hold the current pose")
+            self.controller.enable()
         elif kind == "release":
-            controller.release()
+            self.controller.release()
         elif kind == "disconnect":
             self._return_or_disconnect()
         elif kind == "yield":
             self.pause("Control released; movement paused")
-            self._discard_owner_commands()
-            self.owner = None
-            self._owner_since = None
-            self._heartbeat_stopped = False
+            self._queue.drop_commands_of(self.owner)
+            self._forget_owner()
         elif kind == "layout":
             self.pause("Control layout changed; movement paused")
-            self._discard_owner_commands()
+            self._queue.drop_commands_of(self.owner)
         elif kind == "sync":
             self.pause("Target synchronized; movement paused")
         elif kind == "mode":
-            if value not in MODES:
-                raise ValueError("Unknown control mode")
-            self.pause("Control mode changed; movement paused")
-            self.direct_mode = value == MODES[0]
-        elif kind == "target" and not self.direct_mode:
+            self._change_mode(value)
+
+    def _change_mode(self, mode):
+        if mode not in MODES:
+            raise ValueError("Unknown control mode")
+        self.pause("Control mode changed; movement paused")
+        self.direct_mode = mode == MODES[0]
+
+    def _apply_command(self, client_id, kind, value):
+        controller = self.controller
+        if kind in MOTION:
+            self.keyboard.cancel_and_hold()
+            self.remote.cancel_and_hold()
+        if kind == "target" and not self.direct_mode:
             controller.set_target(value)
         elif kind == "drag" and self.direct_mode:
-            name, phase, grab, pointer = value
-            angles = controller.measured_angles if controller.connected else controller.angles
-            position = self.drag.update(
-                client_id, name, phase, grab, pointer, controller.model.forward(angles)[:3, 3],
-            )
-            if position is not None:
-                controller.set_target(position)
+            self._apply_drag(client_id, value)
         elif kind == "gripper":
             controller.set_gripper(value)
         elif kind in {"roll", "joint"}:
             angles = controller.target_angles.copy()
-            index, degrees = (4, value) if kind == "roll" else value
+            index, degrees = (WRIST_ROLL_INDEX, value) if kind == "roll" else value
             angles[index] = np.deg2rad(degrees)
             controller.set_joints(angles)
         elif kind == "speed":
             controller.speed = float(value)
+
+    def _apply_drag(self, client_id, value):
+        controller = self.controller
+        name, phase, grab, pointer = value
+        angles = controller.measured_angles if controller.connected else controller.angles
+        tool_position = controller.model.forward(angles)[:3, 3]
+        position = self.drag.update(client_id, name, phase, grab, pointer, tool_position)
+        if position is not None:
+            controller.set_target(position)

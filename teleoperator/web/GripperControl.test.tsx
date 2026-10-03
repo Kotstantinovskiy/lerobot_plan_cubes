@@ -7,7 +7,7 @@ import GripperControl from "./GripperControl";
 
 type Pair = [number, number];
 
-describe("SO-101 gripper controls", () => {
+describe("Teleoperator gripper controls", () => {
   let host: HTMLDivElement;
   let root: Root;
   const onChange = vi.fn<(value: Pair) => void>();

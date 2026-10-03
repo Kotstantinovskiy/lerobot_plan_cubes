@@ -10,7 +10,7 @@ export default function Vector2Component({
 }: GuiVector2Message) {
   const { setValue } = React.useContext(GuiComponentContext)!;
   if (!visible) return null;
-  if (label === "so101_gripper") {
+  if (label === "teleoperator_gripper") {
     return <GripperControl value={value} min={min} max={max} disabled={disabled}
       onChange={(next) => setValue(uuid, next)}/>;
   }
