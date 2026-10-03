@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 # Download a dataset archive from Google Drive, check its SHA-256 and unpack it into data/color_cubes_wrist1080.
-#   bash training/fetch_dataset.sh [ep108|ep88|ep68|ep48|ep40|pilot20]   (default ep108)
+#   bash training/fetch_dataset.sh [ep155|ep108|ep88|ep68|ep48|ep40|pilot20]   (default ep155)
 # The Drive folder must be shared as "anyone with the link". gdown lists at most 50 files per folder, so the
 # parts of ep88 and ep68 sit in three subfolders and those of ep48 and ep40 in two; parts are found recursively and
 # joined in name order.
 # ep108 holds only what episodes 88-107 added to ep88 (their data and video files and the whole meta/): ep88 is
-# fetched first, or kept if it is already in place, and ep108 is unpacked over it.
+# fetched first, or kept if it is already in place, and ep108 is unpacked over it. ep155 does the same over ep108.
 # A different dataset already in the target (e.g. the 20-episode pilot) is moved to data/color_cubes_wrist1080_<N>ep.
 # Parts already in WORK are reused, so an interrupted download can be finished by running this again.
 set -euo pipefail
 
-PRESET="${1:-ep108}"
+PRESET="${1:-ep155}"
 BASE=
 case "$PRESET" in
+    ep155)
+        DEFAULT_URL=https://drive.google.com/drive/folders/1UhvT-pLviBgqL7v1l4h6DjS6lweSVH4k
+        NAME=color_cubes_wrist1080_155ep_trimmed_from108.zip
+        PARTS=77
+        EPISODES=155
+        BASE=ep108
+        SHA256=2f3f2552f21288cd7d181df0292a02fd14dd169c161b1f0803258d645d70572f
+        ;;
     ep108)
         DEFAULT_URL=https://drive.google.com/drive/folders/1qEmUvTFyYnP3BfyLZwE1oKjqXpCh7NtN
         NAME=color_cubes_wrist1080_108ep_from88.zip
@@ -56,7 +64,7 @@ case "$PRESET" in
         EPISODES=20
         SHA256=92dea7f290bdb5d8185e18ccaa32e742a959b638aacf4181a22b812a6e7235ca
         ;;
-    *) echo "Неизвестный набор: $PRESET (есть ep108, ep88, ep68, ep48, ep40, pilot20)" >&2; exit 2 ;;
+    *) echo "Неизвестный набор: $PRESET (есть ep155, ep108, ep88, ep68, ep48, ep40, pilot20)" >&2; exit 2 ;;
 esac
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -95,6 +103,8 @@ if command -v sha256sum >/dev/null; then
 else
     echo "$SHA256  $ZIP" | shasum -a 256 -c -
 fi
+# An add-on holds all of meta/, and files of the base's meta/episodes it does not have must not stay behind.
+[ -z "$BASE" ] || rm -rf "$TARGET/meta"
 unzip -q -o "$ZIP" 'color_cubes_wrist1080/*' -d "$PROJECT/data"
 rm "$ZIP"
 HAVE="$(episodes "$TARGET")"

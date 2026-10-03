@@ -19,8 +19,8 @@
   "repo_id": "local/color_cubes_wrist1080",
   "dataset_root": "data/color_cubes_wrist1080",
   "fps": 20,
-  "episode_time_s": 30,
-  "reset_time_s": 20,
+  "episode_time_s": 40,
+  "reset_time_s": 40,
   "display_data": false,
   "play_sounds": true,
   "tasks": {

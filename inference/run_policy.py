@@ -18,6 +18,8 @@ of the current one have run, from the observation at that moment; when it is rea
 passed meanwhile are dropped and the arm switches to it without stopping. Replanning starts once the arm has moved
 from its starting pose: the demonstrations keep 3.5 s of stillness before the first motion, so from a still arm the
 policy plans ~2 s of waiting before it moves, and replanning from still frames would only ever run the wait.
+`--start-threshold` sets how far a joint must go for that to count: pi0.5 stopped again after the end of its first chunk
+had taken the arm just past the default 3 units, and stood still for the 30 s of a run, while 15 is clear of the wait.
 
 A chunk computed in the background is a fresh sample that knows nothing of the one the arm is running: where it takes
 over, the command jumps (on recorded episodes 2-3 times a normal step) and now and then turns to another decision.
@@ -192,6 +194,8 @@ def main():
                         help="Actions run from each chunk before the next one (without --replan)")
     parser.add_argument("--replan", type=positive_int,
                         help="Compute the next chunk in the background after this many actions of the current one")
+    parser.add_argument("--start-threshold", type=float, default=3.0,
+                        help="Joint change, in normalized units, after which the arm counts as moving and --replan starts")
     parser.add_argument("--rtc", action="store_true",
                         help="Guide each background chunk to continue the running one (Real-Time Chunking)")
     parser.add_argument("--rtc-horizon", type=positive_int, default=20,
@@ -248,7 +252,7 @@ def main():
         box_style, crop = target_box_style(args.policy), top_crop.load(args.policy)
     box = None
     if crop:
-        print(f"Top camera cropped to {crop['box']} (x0, y0, x1, y1)", flush=True)
+        print(f"Top camera cropped to {crop.get('box') or crop['quad']}", flush=True)
 
     def observe(obs):
         """Model input from a robot observation; the box is drawn in place, so the video shows it too."""
@@ -336,7 +340,7 @@ def main():
             obs = robot.get_observation()
             pose = np.array([obs[n] for n in names])
             first_pose = pose if first_pose is None else first_pose
-            moved = moved or np.abs(pose - first_pose).max() > 3  # the motion threshold of recording/trim_start.py
+            moved = moved or np.abs(pose - first_pose).max() > args.start_threshold
             frame = observe(obs)
             chunk = None
             if pending is not None and (pending[0].done() or not queue):  # waits only if the current chunk ran out
@@ -370,8 +374,7 @@ def main():
             stats["steps"] += 1
             stats["clipped_steps"] += bool((clipped != values).any())
             if crop is not None:  # after act(): only the video shows the outline
-                x0, y0, x1, y1 = crop["box"]
-                cv2.rectangle(obs["top"], (x0, y0), (x1 - 1, y1 - 1), (128, 128, 128), 2)
+                top_crop.draw_outline(obs["top"], crop)
             side = np.hstack([cv2.resize(obs[k], (640, 360), interpolation=cv2.INTER_AREA) for k in ("top", "wrist")])
             for packet in stream.encode(av.VideoFrame.from_ndarray(side, format="rgb24")):
                 container.mux(packet)
