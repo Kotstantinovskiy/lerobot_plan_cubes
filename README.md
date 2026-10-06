@@ -1,181 +1,107 @@
 # lerobot_plan_cubes
 
-Настольная рука [SO-101](https://github.com/TheRobotStudio/SO-ARM100) по текстовой команде берёт кубик нужного цвета и ставит его на пробковую площадку. Следующая цель: собрать из трёх кубиков пирамидку. Модели учатся на демонстрациях, которые человек записывает второй, ведущей рукой. Всё, что показано ниже, снято на настоящей руке, симуляции здесь нет.
+Tell a desktop [SO-101](https://github.com/TheRobotStudio/SO-ARM100) robot arm which colour of cube to pick, and it places that cube on a cork platform. The next goal is a three-cube pyramid. The models learn from demonstrations recorded with a second, leader arm. Everything below was filmed on the real arm, not in simulation.
 
 <p align="center">
-  <img src="docs/media/pi05_green_pick_place.gif" width="678" alt="Модель pi0.5 берёт зелёный кубик и ставит его на площадку">
+  <img src="docs/media/pi05_green_pick_place.gif" width="678" alt="The pi0.5 model picks up a green cube and places it on the platform">
 </p>
-<p align="center"><sub>Модель pi0.5, команда «зелёный», человек не вмешивался. Слева верхняя камера, справа камера на запястье. Белая рамка отмечает кубик из команды. Ускорено в 2 раза. <a href="runs/policy-run-20261105-211635-green.mp4">Полное видео</a></sub></p>
+<p align="center"><sub>The pi0.5 model, command "green", no human help. Left: top camera. Right: wrist camera. The white box marks the commanded cube. Sped up 2×. <a href="runs/policy-run-20261105-211635-green.mp4">Full video</a></sub></p>
 
 <!-- VIDEO SLOT: overview -->
-<p align="center"><img src="docs/media/video_slot.svg" width="480" alt="Место для видео"></p>
-<p align="center"><sub>Скоро здесь будет видео: установка со стороны.</sub></p>
+<p align="center"><img src="docs/media/video_slot.svg" width="480" alt="Place for a video"></p>
+<p align="center"><sub>Video to come: the whole setup from the side.</sub></p>
 <!-- /VIDEO SLOT -->
 
-## Что уже получается
+## What works
 
-### Кубик по цвету из команды
-
-<p align="center">
-  <img src="docs/media/smolvla_four_colors.gif" width="800" alt="Четыре удачные попытки: красный, синий, зелёный и жёлтый кубик на площадке">
-</p>
-<p align="center"><sub>Одна и та же модель SmolVLA, меняется только цвет в команде. Слева направо: красный, синий, зелёный, жёлтый. Сверху верхняя камера, снизу камера на запястье. Последние четыре попытки серии 3 ноября, ускорено в 2 раза.</sub></p>
-
-Вся серия: 12 попыток в трёх раскладках, по одной на цвет в каждой. На площадке оказалось 8 кубиков из 12, по 2 из 3 на каждый цвет. Чужой кубик рука не взяла ни разу, а каждый взятый донесла. Итоги попыток: [results.csv](runs/series-20261103-191936/results.csv).
-
-Модель pi0.5 на руке 5 ноября без вмешательства человека ставила на площадку синий кубик (на самый край) и дважды зелёный. Серии с подсчётом для неё ещё не было.
-
-### Пирамидка по записи
+### Picking a cube by colour
 
 <p align="center">
-  <img src="docs/media/pyramid_replay.gif" width="300" alt="Рука ставит красный и синий кубики на площадку, а сверху жёлтый">
+  <img src="docs/media/smolvla_four_colors.gif" width="800" alt="Four successful attempts: red, blue, green and yellow cubes placed on the platform">
 </p>
-<p align="center"><sub>Это ещё не модель, а воспроизведение трёх записанных демонстраций: <code>recording/replay.py</code>, эпизоды 158, 156 и 157, половинная скорость, по сохранённым командам и без обратной связи от камер. Кубики расставлены вручную как в записи. Ускорено в 14 раз.</sub></p>
+<p align="center"><sub>The same SmolVLA model, with only the colour in the command changed: red, blue, green, yellow. Top camera above, wrist camera below. Sped up 2×.</sub></p>
+
+In a series of 12 attempts on November 3, 2026, SmolVLA placed 8 cubes, 2 of 3 for each colour, and never took a cube of the wrong colour. [See the results](runs/series-20261103-191936/results.csv). On November 5 the pi0.5 model placed cubes with no human help: blue once, on the very edge of the platform, and green twice. It has not had a counted series yet.
+
+### Building a pyramid from a recording
+
+<p align="center">
+  <img src="docs/media/pyramid_replay.gif" width="300" alt="The arm places red and blue cubes on the platform and yellow on top">
+</p>
+<p align="center"><sub>This is not the model yet. <code>recording/replay.py</code> plays back three recorded demonstrations at half speed with no camera feedback, from cubes set out by hand as in the recording. Sped up 14×.</sub></p>
 
 <!-- VIDEO SLOT: pyramid -->
-<p align="center"><img src="docs/media/video_slot.svg" width="480" alt="Место для видео"></p>
-<p align="center"><sub>Скоро здесь будет видео: пирамидка целиком.</sub></p>
+<p align="center"><img src="docs/media/video_slot.svg" width="480" alt="Place for a video"></p>
+<p align="center"><sub>Video to come: a whole pyramid.</sub></p>
 <!-- /VIDEO SLOT -->
 
-## Как это устроено
+## How it works
 
 ```mermaid
 flowchart LR
-    demo["Демонстрации:<br/>ведущая рука и две камеры"] --> dataset["Датасет LeRobot"]
-    dataset --> train["Дообучение на GPU:<br/>SmolVLA или pi0.5"]
-    train --> run["Запуск на руке"]
-    run -. "где не хватает данных" .-> demo
+    record["Record demonstrations<br/>with a leader arm"] --> train["Fine-tune a model<br/>on a GPU"]
+    train --> run["Run it on the arm"]
+    run -. "shows what data is missing" .-> record
 ```
 
-### 1. Запись демонстраций
+### 1. Record
 
 <p align="center">
-  <img src="docs/media/demonstration_leader_arm.gif" width="420" alt="Оператор ведёт чёрную ведущую руку, белая ведомая повторяет движения">
+  <img src="docs/media/demonstration_leader_arm.gif" width="420" alt="An operator moves the black leader arm and the white follower arm copies it">
 </p>
-<p align="center"><sub>Эпизод 157: человек ведёт чёрную ведущую руку, белая ведомая повторяет и ставит жёлтый кубик на вершину. Ускорено в 3 раза.</sub></p>
+<p align="center"><sub>A person moves the black leader arm, and the white follower copies it. Sped up 3×.</sub></p>
 
-Двадцать раз в секунду пишутся две камеры (верхняя 1280×720, на запястье 1920×1080) и положения суставов, а к эпизоду добавляется текст задания, например «Pick up the red cube and place it on the platform.». Сейчас записано 159 эпизодов, 62 167 кадров: 108 эпизодов с одним кубиком на площадку и 51 для пирамидки, где на столе 8 кубиков, а одна пирамидка занимает три эпизода подряд.
+Two cameras and the joint positions are saved 20 times a second, along with the task text, such as "Pick up the red cube and place it on the platform." There are 159 episodes so far: 108 with one cube to place and 51 for pyramids, three episodes per pyramid.
 
-`recording/record.py` запускает штатный цикл записи LeRobot, но кодирует видео прямо во время эпизода. Поэтому следующий эпизод начинается через 0,6 с, а не через 20–35 с. Он же на macOS держит ровный шаг цикла: 19,95 кадра в секунду вместо 18,7.
+### 2. Train
 
-### 2. Обучение
+[SmolVLA](https://huggingface.co/lerobot/smolvla_base) and [pi0.5](https://huggingface.co/lerobot/pi05_base) are fine-tuned with the [lerobot_cubes](https://github.com/Kotstantinovskiy/lerobot_cubes) fork of LeRobot. On one NVIDIA H100 or H200 this takes about 2 hours for SmolVLA and 14 hours for pi0.5. Three things differ from the standard recipe:
 
-Дообучаются две готовые модели, [SmolVLA](https://huggingface.co/lerobot/smolvla_base) и [pi0.5](https://huggingface.co/lerobot/pi05_base), штатным обучением из форка [lerobot_cubes](https://github.com/Kotstantinovskiy/lerobot_cubes) (LeRobot 0.4.4).
+- **Target box.** A colour detector finds the commanded cube and draws a white box around it on the top camera, so the model only has to take what is in the box.
+- **Cropped top camera.** Only the table stays in view, so the model cannot learn to wait for the operator, who moves first.
+- **Lighting changes.** There is no hue shift, because colour defines the task, but brightness varies more, because all recordings were made in the evening under one lamp.
 
-| | SmolVLA | pi0.5 |
-| --- | --- | --- |
-| Веса чекпойнта | 1,2 ГБ | 14 ГБ |
-| 20 000 шагов на одной GPU | около 2–2,5 часа, H200 или H100 | около 14 часов, H100 |
-| Пачка действий на руке | 0,63–0,72 с на самом Mac | 180–190 мс через сервер с GPU |
+### 3. Run
 
-Что сделано сверх штатного рецепта:
-
-- **Рамка на цели.** Детектор находит кубик названного цвета и рисует вокруг него белую рамку на верхней камере. Цвет понимает детектор, а модели остаётся взять то, что в рамке.
-- **Обрезка верхней камеры.** От кадра остаётся только выровненный стол. Иначе модель видит ведущую руку и оператора, которые трогаются раньше ведомой, и может выучить, что надо ждать их.
-- **Аугментация.** Сдвига оттенка нет, потому что он уводит красный к оранжевому, а задача задаётся цветом. Зато диапазон яркости шире и есть неравномерный свет: все записи сделаны вечером с лампой слева, а рука работает и днём.
-- **Скорость.** Кадры уменьшаются ещё в процессах загрузки, а сами процессы не перезапускаются между эпохами. Обучение SmolVLA занимает около 2 часов вместо почти 4.
-
-Подробности и замеры: [training/README.md](training/README.md).
-
-### 3. Запуск на руке
-
-```mermaid
-flowchart TD
-    word["Цвет из команды"] --> detector["Детектор находит кубик"]
-    top["Верхняя камера"] --> detector
-    detector --> box["Рамка и обрезка по столу"]
-    box --> model["Модель: пачка из 50 действий"]
-    wrist["Камера на запястье"] --> model
-    joints["Положения суставов"] --> model
-    model --> smooth["Перепланирование и RTC"]
-    smooth --> limits["Ограничения диапазона и шага"]
-    limits --> arm["Рука"]
-```
-
-**Перепланирование (`--replan 10`).** Модель выдаёт сразу пачку из 50 действий, это 2,5 с движения. Без флага рука исполняет её вслепую и замирает примерно на секунду, пока считается следующая. С флагом следующая пачка считается в фоне по свежему кадру, и рука идёт без остановок: около 18 шагов в секунду вместо 15.
-
-**RTC (`--rtc`).** Каждая новая пачка начинается не там, где кончилась прежняя, и на стыке рука дёргается. Real-Time Chunking подтягивает начало новой пачки к остатку старой. Наибольший скачок команды на стыке, в единицах суставов:
-
-| | медиана | 90-й процентиль | максимум |
-| --- | --- | --- | --- |
-| без RTC | 18,4 | 32,0 | 68,0 |
-| с RTC | 1,9 | 3,7 | 7,4 |
+`inference/run_policy.py` drives the arm. The model outputs 50 actions at a time, which is 2.5 seconds of motion. `--replan` computes the next batch in the background so the arm never pauses, and `--rtc` (Real-Time Chunking) makes each batch start where the last one ended, which cut the largest jump between batches from 68 to 7.4 joint units.
 
 <p align="center">
-  <img src="docs/media/rtc_comparison.gif" width="568" alt="Камера на запястье: слева без RTC, справа с RTC">
+  <img src="docs/media/rtc_comparison.gif" width="568" alt="Wrist camera without Real-Time Chunking on the left and with it on the right">
 </p>
-<p align="center"><sub>Камера на запястье, реальная скорость, похожая раскладка: слева без RTC, справа с RTC.</sub></p>
+<p align="center"><sub>Wrist camera at real speed, similar layouts: without RTC on the left, with RTC on the right.</sub></p>
 
-**Защита.** Каждая команда обрезается до диапазона суставов из демонстраций и до `--max-step` единиц за кадр. Если момент моторов уже включён или калибровка не совпала, запуск отказывается и руку не трогает. В конце, после Ctrl+C или ошибки рука складывается в исходную позу, а второй Ctrl+C сразу отключает момент.
+Every command stays inside the joint range seen in the demonstrations and the `--max-step` limit, and the arm folds back to rest when a run ends, on Ctrl+C or on an error. pi0.5 is too large for the Mac, so `inference/policy_server.py` runs it on a GPU machine and the laptop connects through an SSH tunnel.
 
-**pi0.5 на сервере.** Для Mac эта модель велика, поэтому пачки считает `inference/policy_server.py` на машине с GPU. Ноутбук через SSH-туннель отправляет кадры и управляет рукой, датасет и чекпойнт на нём не нужны. Если связь пропала, рука складывается в исходную позу.
+### 4. Plan a pyramid
 
-### 4. Планировщик пирамидки
+`inference/run_pyramid.py` looks at the top camera and picks the next step: which cube goes where. It does not move the arm yet. The planner is either a plain loop or a language model given a free-text goal, such as "banana colour on top, cool colours below". The language model has not had a real request yet.
 
-`inference/run_pyramid.py` по кадру верхней камеры выбирает следующий шаг: какой кубик на какое место. Рукой он пока не двигает. Есть два варианта: обычный цикл без сети (`--planner loop`) и языковая модель через OpenRouter (`--planner llm`), которой цель пишется свободным текстом, например «Сверху цвет банана, внизу холодные цвета», а каждый её шаг проверяют правила. Цикл проверен на настоящих кадрах пирамидки, настоящего запроса к OpenRouter ещё не было.
+To drive the arm by hand from a browser or an iPhone, see [teleoperator](https://github.com/Kotstantinovskiy/teleoperator).
 
-### 5. Управление без ведущей руки
+## Progress
 
-Рукой можно управлять из браузера на Mac и с iPhone, в том числе двумя стиками в горизонтальной раскладке. Это отдельное приложение, оно живёт в своём репозитории: [teleoperator](https://github.com/Kotstantinovskiy/teleoperator).
-
-| Панель на Mac | Пульт в горизонтальной раскладке |
-| --- | --- |
-| <img src="docs/media/teleoperator_panel.png" width="400" alt="3D-сцена с рукой и панель управления"> | <img src="docs/media/teleoperator_remote.jpg" width="400" alt="Пульт с двумя стиками и местами под камеры"> |
-
-<sub>Снято в браузере на Mac, без робота и с выключенными камерами.</sub>
-
-<!-- VIDEO SLOT: iphone -->
-<p align="center"><img src="docs/media/video_slot.svg" width="480" alt="Место для видео"></p>
-<p align="center"><sub>Скоро здесь будет видео: управление настоящей рукой с iPhone.</sub></p>
-<!-- /VIDEO SLOT -->
-
-## Как менялись результаты
-
-| 17 октября | 26 октября | 27 октября |
+| Oct 17, 2026 | Oct 26 | Oct 27 |
 | --- | --- | --- |
-| <img src="docs/media/timeline_base_model.gif" width="260" alt="Рука остаётся у исходной позы"> | <img src="docs/media/timeline_pilot.gif" width="260" alt="Рука идёт к кубикам, но не к синему"> | <img src="docs/media/timeline_target_box.gif" width="260" alt="Рука подъезжает к кубику в рамке и отходит"> |
-| Базовая модель без дообучения: к кубикам не подходит | 20 эпизодов, команда «синий»: идёт к другим кубикам | 40 эпизодов и рамка: подъезжает к нужному кубику, но не берёт |
+| <img src="docs/media/timeline_base_model.gif" width="260" alt="The arm stays near its rest pose"> | <img src="docs/media/timeline_pilot.gif" width="260" alt="The arm goes towards other cubes rather than the blue one"> | <img src="docs/media/timeline_target_box.gif" width="260" alt="The arm approaches the cube in the box and backs away"> |
+| Base model, no fine-tuning: never reaches the cubes | 20 episodes, command "blue": goes to other cubes | 40 episodes and the box: approaches the right cube but does not take it |
 
-<sub>Верхняя камера, ускорено в 2,5 раза.</sub>
+<sub>Top camera, sped up 2.5×. More episodes, the crop and RTC then led to the results at the top of this page.</sub>
 
-| Дата | Модель и данные | Что было на руке |
-| --- | --- | --- |
-| 17 октября | `smolvla_base` без дообучения | к кубикам не подходит |
-| 26 октября | SmolVLA, 20 эпизодов | кубик по цвету не выбирает, захватов не было (синий) или промах на несколько сантиметров (красный) |
-| 27 октября | SmolVLA, 40 эпизодов, рамка | подъезжает к нужному кубику, но не берёт; в 3 прогонах из 8 стоит на месте |
-| 3 ноября | SmolVLA, 88 эпизодов, рамка, обрезка, RTC | 8 из 12 на площадке, чужой кубик не взят ни разу |
-| 4 ноября | pi0.5, 88 эпизодов, рамка, обрезка, RTC | красный и синий на площадке, но рядом с кубиком была рука человека; повёрнутый зелёный не взят |
-| 5 ноября | SmolVLA, 154 эпизода и дообучение на пирамидках | один чистый захват, кубик встал мимо площадки на ширину кубика |
-| 5 ноября | pi0.5, 154 эпизода, рамка, выровненная обрезка, RTC | без вмешательства: синий на край площадки, зелёный дважды на площадку; серии ещё не было |
+## What does not work yet
 
-Оценка на записанных кадрах (`training/eval_offline.py`) хорошо показывает, читает ли модель цвет в команде, но успех на руке она не предсказывала. Модель на 20 эпизодах офлайн явно реагировала на цвет, а на руке кубик по цвету не выбирала: при таком числе записей она запомнила траектории.
-
-## Что пока не получается
-
-| Кубик повёрнут к губкам | Взят чужой кубик |
+| Cube turned to the jaws | Wrong cube |
 | --- | --- |
-| <img src="docs/media/fail_rotated_cube.gif" width="400" alt="Рука зависла над зелёным кубиком, повёрнутым примерно на 45 градусов"> | <img src="docs/media/fail_wrong_cube.gif" width="400" alt="Рамка на синем кубике, а рука берёт зелёный"> |
-| pi0.5, 4 ноября: рука дошла до нужного кубика и зависла над ним. Ускорено в 2 раза. [Видео](runs/policy-run-20261104-185409-green.mp4) | pi0.5, 5 ноября: рамка на синем, а рука прошла над ним и взяла зелёный. Ускорено в 2 раза. [Видео](runs/policy-run-20261105-175859-blue.mp4) |
+| <img src="docs/media/fail_rotated_cube.gif" width="400" alt="The arm hovers over a green cube turned about 45 degrees"> | <img src="docs/media/fail_wrong_cube.gif" width="400" alt="The box is on the blue cube, but the arm takes the green one"> |
+| pi0.5 reaches the right cube and hovers over it. Sped up 2×. [Video](runs/policy-run-20261104-185409-green.mp4) | pi0.5 passes over the boxed blue cube and takes the green one. Sped up 2×. [Video](runs/policy-run-20261105-175859-blue.mp4) |
 
-- **Сама модель пирамидку пока не собирает.** На вершину кубик она не ставила: единственный завершённый прогон pi0.5 отпустил красный рядом с основанием, причём кубик перед этим поправила рука человека. Дообучение pi0.5 на пирамидках на руке ещё не запускалось.
-- **Поворот кубика.** При повороте около 40–45° рука зависает над кубиком, при 25° брала. Это наблюдение по нескольким прогонам, отдельно оно не проверялось.
-- **Рамка не едет за кубиком.** Рамка рисуется один раз, до движения. Если рука сдвинула кубик, модель ищет его на старом месте.
-- **Дальние кубики.** В серии 3 ноября рука не дотягивалась до кубиков, стоявших дальше всех демонстраций. После этого записаны эпизоды и с такими раскладками, но заново серию не повторяли.
-- **Новый код на железе.** Рефакторинг 6 ноября проверен тестами и сравнением со старым кодом на подставных устройствах. Все прогоны на этой странице сделаны до него, на настоящей руке, камерах и GPU новый код ещё не запускался.
+- **No pyramid from the model yet.** It has never placed a cube on top, and pi0.5 fine-tuned on pyramids has not run on the arm.
+- **Turned cubes.** At about 40–45° the arm hovers over the cube, while at 25° it still picked it up. This comes from several runs and has not been tested on purpose.
+- **The box does not follow the cube.** It is drawn once, before the arm moves, so the model looks for a nudged cube in its old place.
+- **Latest code untested on hardware.** The refactor of November 6 passed the tests and matched the old code on simulated devices, but all the runs on this page came before it.
 
-## Оборудование
+## Setup
 
-| Что | Модель |
-| --- | --- |
-| Две руки, ведомая и ведущая | SO-101 |
-| Верхняя камера | Sport Cam, 1280×720 |
-| Камера на запястье | Innomaker U20CAM, 1920×1080 |
-| Компьютер у руки | Mac, замеры на M3 с 16 ГБ памяти |
-| Обучение и сервер pi0.5 | Linux, NVIDIA H100 или H200 |
-
-## Установка
-
-Рядом с этим репозиторием нужен форк LeRobot с патчем выбора камер на macOS:
+You need two SO-101 arms, a top camera and a wrist camera, a Mac next to the arm, and a Linux machine with an NVIDIA GPU for training and for serving pi0.5.
 
 ```bash
 git lfs install
@@ -184,74 +110,50 @@ git clone git@github.com:Kotstantinovskiy/lerobot_plan_cubes.git
 
 cd lerobot_cubes
 python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -e '.[smolvla,feetech]' pandas pyarrow
-# Только на macOS, для камер:
+# On macOS only, for the cameras:
 .venv/bin/python -m pip install 'opencv-python-headless==4.12.0.88' pyobjc-framework-AVFoundation
 
 cd ../lerobot_plan_cubes
 source ../lerobot_cubes/.venv/bin/activate
 ```
 
-Порты рук, камеры и калибровки заданы в `config.json`. Для другой машины удобно скопировать его в `config.local.json` (он не попадает в Git) и передавать через `--config`. Подробнее: [docs/TRANSFER.md](docs/TRANSFER.md). На машине с GPU окружение готовит `bash training/setup_linux.sh`.
+Ports, cameras and calibrations are in `config.json`. On a GPU machine, `bash training/setup_linux.sh` prepares the environment.
 
-Видео прогонов лежат в Git LFS: `git lfs pull --include='runs/**'`.
+## Commands
 
-## Основные команды
-
-Все команды запускаются из корня репозитория с активированным окружением.
+Run these from the repository root with the environment active.
 
 ```bash
-# Телеуправление без записи: ведомая рука повторяет ведущую
-python recording/teleoperate.py
-
-# Запись демонстраций: цвета по очереди, дозапись в датасет
+# Record demonstrations, taking colours in turn
 python recording/record.py --color red,blue,green,yellow --episodes 8 --resume
 
-# Воспроизвести эпизод и сложить руку в исходную позу
+# Replay an episode, then fold the arm back to rest
 python recording/replay.py --episode 157 --speed 0.5
 python recording/rest.py
 
-# Обучение на машине с GPU
+# Train on a GPU machine
 bash training/fetch_dataset.sh
 python training/label_boxes.py
 python training/train.py --gpu 0 --target-box --top-crop --run-name my-run
 
-# Проверка чекпойнта на записанных кадрах, без руки
-python training/eval_offline.py --policy outputs/train/my-run/checkpoints/last/pretrained_model
+# Run on the arm
+HF_HUB_OFFLINE=1 python inference/run_policy.py --policy <pretrained_model folder> --color red --seconds 30 --max-step 10 --replan 10 --rtc
 
-# Запуск на руке
-HF_HUB_OFFLINE=1 python inference/run_policy.py --policy <папка pretrained_model> --color red --seconds 30 --max-step 10 --replan 10 --rtc
-
-# Серия попыток с итогами в CSV
-HF_HUB_OFFLINE=1 python inference/run_series.py --policy <папка pretrained_model> --layouts 3 --seconds 30 --max-step 10 --replan 10 --rtc
-
-# Тесты без оборудования
+# Run the tests, no hardware needed
 python -m unittest discover -s tests
 ```
 
-## Структура репозитория
+## Repository layout
 
 ```
-config.json    настройки рук, камер и датасета
-calibration/   калибровки ведущей и ведомой руки
-recording/     запись демонстраций, телеуправление, воспроизведение, возврат в исходную позу, обрезка простоя
-training/      обучение SmolVLA и pi0.5 на машине с GPU, проверка чекпойнтов без робота
-inference/     запуск модели на руке, сервер pi0.5, детектор кубиков, планировщик пирамидки
-diagnostics/   диагностика и замеры камер
-tests/         тесты без оборудования
-runs/          видео прогонов на руке и итоги серий (видео в Git LFS)
-docs/          журнал проекта, перенос на другой компьютер, камеры, гифки этой страницы
-data/          датасеты LeRobot; в Git только первый маленький color_cubes_vga (видео в Git LFS)
-camera_check/  локальные проверочные записи (не в Git)
-outputs/       результаты обучения (не в Git)
+recording/    recording, teleoperation, replay, folding back to rest
+training/     training, checking checkpoints without the arm
+inference/    running a model on the arm, the pi0.5 server, the cube detector, the pyramid planner
+diagnostics/  camera measurements
+tests/        tests that need no hardware
+runs/         videos of runs on the arm (Git LFS) and results of series
+docs/         project journal, moving to another computer, media for this page
 ```
 
-## Документы
-
-- [training/README.md](training/README.md): настройки обучения, замеры скорости, рамка, обрезка, pi0.5, запуск через сервер.
-- [docs/HISTORY.md](docs/HISTORY.md): журнал проекта с замерами по датам и ссылками на архивы датасета и чекпойнтов.
-- [docs/TRANSFER.md](docs/TRANSFER.md): перенос этих рук на другой компьютер.
-- [docs/LOCAL_CAMERAS.md](docs/LOCAL_CAMERAS.md): камеры и как они выбираются.
-- [calibration/README.md](calibration/README.md): калибровки рук.
-- [teleoperator](https://github.com/Kotstantinovskiy/teleoperator): управление рукой из браузера и с iPhone.
+More detail, in Russian: [training settings and measurements](training/README.md), [project journal with links to dataset and checkpoint archives](docs/HISTORY.md), [moving to another computer](docs/TRANSFER.md).
