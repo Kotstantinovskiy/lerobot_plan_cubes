@@ -1,5 +1,0 @@
-.venv/
-.venv-robot/
-.viewer-build/
-.pytest_cache/
-__pycache__/

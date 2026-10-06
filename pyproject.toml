@@ -1,14 +1,10 @@
 # Lint and format settings for the whole repository: uvx ruff check . && uvx ruff format .
-# Environments live elsewhere: teleoperator/pyproject.toml for the arm app, ../lerobot_cubes for the rest.
+# The environment lives elsewhere, in ../lerobot_cubes.
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = [".", "teleoperator", "teleoperator/tests", "diagnostics", "inference", "recording", "tests", "training"]
-extend-exclude = ["camera_check", "data", "outputs", "runs", "teleoperator/.viewer-build"]
+src = [".", "diagnostics", "inference", "recording", "tests", "training"]
+extend-exclude = ["camera_check", "data", "outputs", "runs"]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "N", "SIM", "UP"]
-
-[tool.ruff.lint.per-file-ignores]
-# The patches quote whole lines of Viser's web client source, which must match it exactly.
-"teleoperator/build_viewer.py" = ["E501"]
