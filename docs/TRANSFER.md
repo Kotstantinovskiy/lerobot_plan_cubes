@@ -9,7 +9,7 @@
 ```bash
 git lfs install
 git clone --recurse-submodules git@github.com:Kotstantinovskiy/lerobot_cubes.git
-git clone <адрес репозитория color_cubes> color_cubes
+git clone git@github.com:Kotstantinovskiy/lerobot_plan_cubes.git color_cubes
 cd color_cubes
 git lfs pull --include='data/color_cubes_vga/videos/**'
 ```
