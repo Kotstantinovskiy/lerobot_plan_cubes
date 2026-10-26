@@ -1,0 +1,149 @@
+:root {
+  --control-bg: #111315;
+  --control-card: #15181c;
+  --control-line: #2b3035;
+  --control-text: #f2f4ef;
+  --control-muted: #9ca3a8;
+  --control-accent: #d6f39a;
+}
+
+html, body { background: var(--control-bg) !important; color: var(--control-text); }
+body, button, input, select { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+[data-mantine-color-scheme="dark"] {
+  --mantine-color-body: #15181c;
+  --mantine-color-text: #f2f4ef;
+  --mantine-color-dark-4: #343a40;
+  --mantine-color-dark-5: #272c31;
+  --mantine-color-dark-6: #1d2125;
+  --mantine-color-dark-7: #15181c;
+  --mantine-color-dark-8: #111315;
+  --mantine-color-dimmed: #9ca3a8;
+}
+.mantine-Input-input { border-color: var(--control-line) !important; background: #1d2125 !important; border-radius: 8px !important; }
+.mantine-Button-root { border-radius: 10px !important; font-size: 14px !important; font-weight: 550 !important; min-height: 44px; }
+.mantine-Button-root:focus-visible, .mantine-Input-input:focus-visible { outline: 2px solid var(--control-accent); outline-offset: 3px; }
+.mantine-Select-input { min-height: 38px !important; }
+.mantine-Accordion-item { border-color: transparent !important; }
+.mantine-Accordion-control { border-radius: 8px !important; }
+.mantine-Slider-bar, .mantine-Slider-thumb { background: var(--control-accent) !important; }
+.mantine-Slider-thumb { border-color: var(--control-accent) !important; }
+.mantine-Slider-track::before { background: #343a40 !important; }
+
+.control-brand { padding: 22px 18px 10px; }
+.control-brand h1 { margin: 0; color: var(--control-text); font-size: 32px; font-weight: 550; letter-spacing: -.05em; line-height: 1.2; }
+.phone-pairing { padding: 12px; }
+.phone-pairing img { display: block; max-width: 100%; height: auto; margin: 0 auto 16px; border-radius: 10px; }
+.phone-pairing p { color: var(--control-muted); font-size: 13px; line-height: 1.5; }
+.phone-pairing__url { overflow-wrap: anywhere; user-select: text; }
+.control-status { margin: 0 18px 20px; color: var(--control-muted); }
+.control-status__top { display: flex; align-items: center; gap: 12px; }
+.control-status__label { color: var(--control-muted); font-size: 14px; font-weight: 450; letter-spacing: 0; }
+.control-status p { margin: 9px 0 0; color: var(--control-muted); font-size: 13px; line-height: 1.5; }
+.control-status.is-error .control-status__label { color: #ff8d7c; }
+.control-status.is-live .control-status__label { color: var(--control-accent); }
+.camera-feeds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 24px 12px; }
+.camera-feed { min-width: 0; }
+.camera-feed h2 { margin: 0 0 9px; color: var(--control-muted); font-size: 14px; line-height: 20px; font-weight: 450; }
+.camera-feed__frame { display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 10; overflow: hidden; border-radius: 10px; background: #20252a; }
+.camera-feed__frame img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; }
+.camera-feed__placeholder { padding: 12px 4px; color: var(--control-muted); font-size: 12px; line-height: 18px; text-align: center; }
+.control-telemetry { margin: 12px; }
+.control-telemetry__heading { color: var(--control-muted); font-size: 13px; }
+.control-telemetry__values { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 14px; }
+.control-telemetry__values div { display: flex; flex-direction: column; gap: 6px; }
+.control-telemetry__values span { color: var(--control-muted); font-size: 13px; }
+.control-telemetry__values strong { font-size: 24px; font-weight: 450; font-variant-numeric: tabular-nums; }
+.control-telemetry__footer { margin-top: 16px; color: var(--control-muted); font-size: 13px; }
+
+.gripper-control { margin: 8px 12px 28px; padding: 8px 0; color: var(--control-text); }
+.gripper-control.is-disabled { opacity: .4; }
+.gripper-control__instruments { display: grid; grid-template-columns: minmax(0, 1fr) 78px; align-items: end; gap: 20px; }
+.dial-control { min-width: 0; }
+.wrist-dial { width: 100%; max-width: 202px; aspect-ratio: 1; position: relative; margin: 0 auto; border-radius: 50%; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.wrist-dial.is-active { cursor: grabbing; }
+.wrist-dial:focus-visible { outline: 2px solid var(--control-accent); outline-offset: 5px; }
+.wrist-dial__face { display: block; width: 100%; height: 100%; }
+.wrist-dial__track { fill: none; stroke: #343a40; stroke-width: 12; stroke-linecap: round; }
+.wrist-dial__progress { fill: none; stroke: var(--control-accent); stroke-width: 12; stroke-linecap: round; }
+.wrist-dial__marker { fill: #111315; }
+.wrist-dial__readout { pointer-events: none; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.wrist-dial__readout strong { color: var(--control-text); font-size: clamp(38px, 4vw, 48px); line-height: 1; font-weight: 450; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
+.wrist-dial__readout strong small { color: var(--control-muted); font-size: .58em; vertical-align: super; margin-left: 3px; }
+.instrument-label { margin-top: 13px; color: var(--control-muted); font-size: 14px; line-height: 20px; text-align: center; }
+.opening-control { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.gripper-fader { position: relative; width: 64px; height: 144px; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.gripper-fader:focus-visible { outline: 2px solid var(--control-accent); outline-offset: 5px; border-radius: 12px; }
+.gripper-fader__rail { position: absolute; inset: 0 21px; border-radius: 12px; background: #343a40; }
+.gripper-fader__fill { position: absolute; bottom: 0; left: 0; right: 0; border-radius: 12px; background: #73845c; }
+.gripper-fader__thumb { position: absolute; left: 50%; width: 44px; height: 18px; transform: translate(-50%, 50%); border-radius: 10px; background: var(--control-accent); }
+.opening-control__readout { margin-top: 20px; color: var(--control-text); font-size: 30px; line-height: 1; font-weight: 450; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.opening-control__readout small { margin-left: 3px; color: var(--control-muted); font-size: 17px; }
+
+.remote-entry { display: block; width: calc(100% - 24px); min-height: 44px; margin: 18px 12px 0; border: 1px solid var(--control-line); border-radius: 10px; background: transparent; color: var(--control-text); font-size: 15px; cursor: pointer; }
+.remote-control { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; box-sizing: border-box; width: 100vw; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0; height: 100vh; height: 100dvh; padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: var(--control-bg); color: var(--control-text); overflow: hidden; overscroll-behavior: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+.remote-control::backdrop { background: var(--control-bg); }
+.remote-control:not([open]) { display: none; }
+.remote-control__header { display: flex; align-items: center; gap: 16px; min-height: 48px; flex: 0 0 auto; }
+.remote-control__status { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+.remote-control__status strong { font-size: 23px; font-weight: 500; letter-spacing: -.04em; white-space: nowrap; }
+.remote-control__status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--control-muted); font-size: 14px; }
+.remote-control__actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.remote-button { border: 1px solid var(--control-line); border-radius: 10px; background: #20252a; color: var(--control-text); font: inherit; font-size: 15px; min-height: 44px; padding: 0 18px; white-space: nowrap; cursor: pointer; }
+.remote-button:focus-visible, .remote-entry:focus-visible, .remote-grip:focus-visible { outline: 2px solid var(--control-accent); outline-offset: 3px; }
+.remote-button:disabled { opacity: .4; cursor: default; }
+.remote-back { padding: 0 14px; background: transparent; }
+.remote-enable { background: var(--control-accent); color: #111315; border-color: transparent; }
+.remote-stop { min-width: 100px; background: #cf493c; border-color: transparent; color: white; }
+.remote-control__body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.5fr) minmax(140px, 1fr); align-items: center; gap: clamp(16px, 3vw, 48px); padding-top: 12px; }
+.remote-control__left, .remote-control__right { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.remote-stick-group { width: 100%; max-width: min(30vh, 250px); }
+.remote-stick { position: relative; width: 100%; aspect-ratio: 1; box-sizing: border-box; border: 2px solid #3c444c; border-radius: 50%; background: #1b2025; touch-action: none; cursor: grab; overflow: visible; }
+.remote-stick.is-disabled { opacity: .3; cursor: default; }
+.remote-stick__cross { position: absolute; inset: 0; pointer-events: none; }
+.remote-stick__cross::before, .remote-stick__cross::after { content: ""; position: absolute; background: #30383f; }
+.remote-stick__cross::before { top: 50%; left: 12%; width: 76%; height: 1px; }
+.remote-stick__cross::after { left: 50%; top: 12%; height: 76%; width: 1px; }
+.remote-stick__thumb { position: absolute; width: 42%; aspect-ratio: 1; border-radius: 50%; background: var(--control-accent); transform: translate(-50%, -50%); pointer-events: none; }
+.remote-stick__label { margin-top: 12px; color: var(--control-muted); font-size: 15px; text-align: center; white-space: nowrap; }
+.remote-control__cameras { min-width: 0; min-height: 0; align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.remote-control__cameras .camera-feeds { width: 100%; height: 100%; max-height: 520px; min-height: 0; margin: 0; gap: 14px; grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.remote-control__cameras .camera-feed { display: flex; flex-direction: column; min-height: 0; }
+.remote-control__cameras .camera-feed h2 { flex: 0 0 auto; margin-bottom: 5px; font-size: 13px; line-height: 18px; }
+.remote-control__cameras .camera-feed__frame { flex: 1; min-height: 0; aspect-ratio: auto; border-radius: 8px; }
+.remote-control__cameras .camera-feed__placeholder { font-size: 14px; }
+.remote-control__gripper { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; max-width: 260px; margin-top: 16px; }
+.remote-grip { min-height: 48px; padding: 0 8px; border: 1px solid #3c444c; border-radius: 10px; background: #20252a; color: var(--control-text); font-size: 14px; touch-action: none; cursor: pointer; }
+.remote-grip.is-active { background: var(--control-accent); border-color: transparent; color: #111315; }
+.remote-grip:disabled { opacity: .3; cursor: default; }
+
+@media (orientation: landscape) and (max-height: 440px) {
+  .remote-control { padding-top: max(4px, env(safe-area-inset-top)); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .remote-control__header { min-height: 44px; }
+  .remote-control__body { gap: 18px; grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.5fr) minmax(130px, 1fr); padding-top: 6px; }
+  .remote-stick-group { max-width: min(41vh, 190px); }
+  .remote-stick__label { margin-top: 8px; font-size: 13px; }
+  .remote-control__gripper { margin-top: 10px; }
+  .remote-grip { min-height: 44px; font-size: 13px; }
+  .remote-control__cameras .camera-feeds { gap: 9px; }
+}
+
+@media (max-width: 700px) {
+  .remote-control__status span { display: none; }
+  .remote-control__header { gap: 10px; }
+  .remote-control__actions { gap: 8px; }
+  .remote-button { padding: 0 12px; font-size: 14px; }
+  .remote-stop { min-width: 76px; }
+}
+
+@media (orientation: portrait) {
+  .remote-control__body { grid-template-columns: 1fr 1fr; gap: 18px; }
+  .remote-control__cameras { grid-column: 1 / -1; grid-row: 1; min-height: 120px; }
+  .remote-control__cameras .camera-feeds { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  .remote-control__left, .remote-control__right { align-self: start; }
+  .remote-stick-group { max-width: 180px; }
+}
+
+@media (max-width: 360px) {
+  .gripper-control__instruments { gap: 12px; grid-template-columns: minmax(0, 1fr) 64px; }
+  .wrist-dial__readout strong { font-size: 38px; }
+}
