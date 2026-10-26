@@ -15,6 +15,7 @@
     "id": "my_so100_leader",
     "calibration_dir": "calibration/teleoperators/so_leader"
   },
+  "rest_pose": {"shoulder_pan": -1.8, "shoulder_lift": -98.6, "elbow_flex": 98.0, "wrist_flex": 78.3, "wrist_roll": -31.8, "gripper": 0.4},
   "repo_id": "local/color_cubes_wrist1080",
   "dataset_root": "data/color_cubes_wrist1080",
   "fps": 20,

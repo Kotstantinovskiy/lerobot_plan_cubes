@@ -2,8 +2,9 @@
 """Let a SmolVLA policy drive the follower inside a safety envelope; nothing is added to the dataset.
 
 Observations are normalized with our dataset statistics. Every command is clipped to the joint range
-seen in our demonstrations and to `--max-step` per frame. Torque is disabled on exit or Ctrl+C.
-A side-by-side top/wrist video of the run is saved under camera_check/.
+seen in our demonstrations and to `--max-step` per frame. When the run ends, after Ctrl+C or an error,
+the follower folds back to `rest_pose` from config.json (`--no-rest` skips it; a second Ctrl+C drops
+torque at once), then torque is disabled. A side-by-side top/wrist video of the run is saved under camera_check/.
 """
 
 import argparse
@@ -31,6 +32,7 @@ from lerobot.utils.utils import get_safe_torch_device
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 from record import PROJECT, load_config, positive_int  # noqa: E402
+from rest import fold_to_rest  # noqa: E402
 
 # Our camera keys -> the keys smolvla_base was pretrained with (camera1 = top, camera2 = wrist).
 RENAME = {"observation.images.top": "observation.images.camera1",
@@ -86,6 +88,7 @@ def main():
     parser.add_argument("--n-action-steps", type=positive_int, default=50)
     parser.add_argument("--device", default="mps")
     parser.add_argument("--dry-run", action="store_true", help="Run one inference on a recorded frame; no robot")
+    parser.add_argument("--no-rest", action="store_true", help="Leave the arm where the run ends instead of folding it")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -166,6 +169,12 @@ def main():
         print("Stopped by Ctrl+C.", flush=True)
     finally:
         if robot.bus.is_connected:  # robot.is_connected is also False when only a camera has failed
+            try:
+                if not args.no_rest and all(robot.bus.sync_read("Torque_Enable").values()):
+                    print("Folding back to rest; Ctrl+C drops torque at once.", flush=True)
+                    fold_to_rest(robot.bus, config["rest_pose"], ds_meta.fps, log=lambda s: print(s, flush=True))
+            except (Exception, KeyboardInterrupt) as error:
+                print(f"Return to rest stopped: {error!r}", flush=True)
             try:
                 robot.disconnect()
             except Exception:
