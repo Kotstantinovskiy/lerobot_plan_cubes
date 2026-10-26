@@ -83,8 +83,9 @@ def build_command(args, config):
         if args.full_finetune:
             options["policy.train_expert_only"] = False
             options["policy.freeze_vision_encoder"] = False
-    # lerobot_train, with frames shrunk to SmolVLA's input size inside the DataLoader workers (same model inputs).
-    command = [sys.executable, str(Path(__file__).with_name("lerobot_train_resized.py"))]
+    # lerobot_train with faster data loading: frames shrunk to SmolVLA's input size inside the workers (same model
+    # inputs) and no worker restarts between epochs.
+    command = [sys.executable, str(Path(__file__).with_name("lerobot_train_fast.py"))]
     command += [f"--{key}={encode(value)}" for key, value in options.items()]
     return command + args.extra, output_dir
 
@@ -101,9 +102,9 @@ def main():
     parser.add_argument("--batch-size", type=positive_int, default=64)
     parser.add_argument("--save-freq", type=positive_int, default=2_500)
     parser.add_argument("--log-freq", type=positive_int, default=100)
-    # Workers decode and augment full-resolution frames: on devbox01 16 of them prepared a batch of 64 in ~1 s,
-    # 32 in 0.26 s against 0.49 s of GPU work (H200).
-    parser.add_argument("--num-workers", type=int, default=min(32, os.cpu_count() or 1))
+    # Workers decode and augment full-resolution frames, ~0.1-0.15 s per sample: on devbox01 (H200) 32 of them could
+    # not keep up with a 0.32 s bf16 step, 64 leave the GPU waiting 0.02 s per step.
+    parser.add_argument("--num-workers", type=int, default=min(64, os.cpu_count() or 1))
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--episodes", type=episode_list, help="Обучать только на этих эпизодах, например 0,1,2")
     parser.add_argument("--full-finetune", action="store_true",
@@ -111,6 +112,12 @@ def main():
     parser.add_argument("--no-augment", action="store_true", help="Без аугментации изображений")
     parser.add_argument("--video-backend", default="pyav", help="pyav или torchcodec (нужен системный FFmpeg)")
     parser.add_argument("--device", default="cuda")
+    # lerobot_train creates its Accelerator without mixed_precision, so accelerate takes it from the environment.
+    # bf16 autocast keeps fp32 master weights and optimizer state; matmuls run in bf16 (TF32 is on either way).
+    # On the pilot with the same seed and data, loss and grad norm matched fp32 to 3 decimals over 900 steps,
+    # and the GPU part of a step went from 0.47 to 0.32 s.
+    parser.add_argument("--precision", choices=["bf16", "fp32"], default="bf16",
+                        help="bf16 — autocast при fp32-весах; fp32 — без autocast")
     parser.add_argument("--gpu", help="Номер GPU (CUDA_VISIBLE_DEVICES), например 0")
     parser.add_argument("--wandb", action="store_true", help="Логировать в Weights & Biases")
     parser.add_argument("--resume", action="store_true", help="Продолжить --run-name с последнего чекпойнта")
@@ -141,6 +148,7 @@ def main():
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         if args.gpu is not None:
             env["CUDA_VISIBLE_DEVICES"] = args.gpu
+        env["ACCELERATE_MIXED_PRECISION"] = "bf16" if args.precision == "bf16" else "no"
         # Relative paths inside lerobot (outputs/, caches) resolve against the project root.
         return subprocess.call(command, env=env, cwd=PROJECT)
     except (OSError, ValueError, KeyError, TypeError) as exc:
