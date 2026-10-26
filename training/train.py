@@ -133,7 +133,7 @@ def main():
                 raise ValueError(f"Нет чекпойнта для продолжения: {output_dir / 'checkpoints' / 'last'}")
         else:
             if not (Path(config["dataset_root"]) / "meta" / "info.json").is_file():
-                raise ValueError(f"Нет датасета: {config['dataset_root']}. См. training/fetch_pilot.sh")
+                raise ValueError(f"Нет датасета: {config['dataset_root']}. См. training/fetch_dataset.sh")
             if output_dir.exists():
                 raise ValueError(f"Папка запуска уже существует: {output_dir}. Укажи другой --run-name или --resume")
         output_dir.parent.mkdir(parents=True, exist_ok=True)

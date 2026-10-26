@@ -13,7 +13,7 @@ UV="${UV:-$(command -v uv || echo "$HOME/.local/bin/uv")}"
 [ -d "$LEROBOT_DIR/.git" ] || git clone "$LEROBOT_REPO" "$LEROBOT_DIR"
 cd "$LEROBOT_DIR"
 [ -x .venv/bin/python ] || "$UV" venv --python 3.12 .venv
-# gdown fetches the dataset archive from Google Drive (training/fetch_pilot.sh).
+# gdown fetches the dataset archive from Google Drive (training/fetch_dataset.sh).
 "$UV" pip install --python .venv/bin/python -e '.[smolvla]' gdown
 .venv/bin/python -c "import torch, lerobot; print('lerobot', lerobot.__version__, '| torch', torch.__version__, '| CUDA', torch.cuda.is_available())"
 echo "Окружение: source $LEROBOT_DIR/.venv/bin/activate"
