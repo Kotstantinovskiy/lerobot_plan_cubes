@@ -7,6 +7,10 @@ over the first --horizon steps (normalized joint units, as in the dataset). The 
 with the right command. If the wrong colours give about the same error and the chunk barely moves when only the
 colour word changes, the policy ignores the colour in the command.
 
+For a policy trained with target boxes (target_box.json in its folder) a command of a colour also draws the box
+around that colour's cube, taken from the dataset's meta/cube_boxes.json: a wrong colour points the box at another
+cube, so the table shows whether the policy follows the box and the word.
+
 Episodes the policy was trained on only show how well it fitted them; hold some out (train.py --episodes) to see
 generalisation. The policy is loaded exactly as inference/run_policy.py loads it on the robot.
 """
@@ -22,7 +26,8 @@ import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference"))
-from run_policy import PROJECT, load_config, load_policy, positive_int  # noqa: E402
+import cube_boxes  # noqa: E402
+from run_policy import PROJECT, load_config, load_policy, positive_int, target_box_style  # noqa: E402
 
 
 def episode_list(value):
@@ -57,6 +62,10 @@ def main():
         parser.exit(2, f"Ошибка: --horizon больше chunk_size политики ({policy.config.chunk_size})\n")
     noise_shape = (policy.config.chunk_size, policy.config.max_action_dim)
     generator = torch.Generator().manual_seed(args.seed)
+    box_style = target_box_style(args.policy)
+    if box_style:
+        labels = json.loads((Path(root) / "meta" / "cube_boxes.json").read_text())["episodes"]
+        camera = box_style["camera"]
 
     episodes = args.episodes if args.episodes is not None else list(range(ds_meta.total_episodes))
     stride = max(1, round(args.every_s * fps))
@@ -73,7 +82,15 @@ def main():
         noise = torch.randn((len(items), *noise_shape), generator=generator)
         chunks = {}
         for color in colors:
-            batch = pre({**obs, "task": [config["tasks"][color]] * len(items), "robot_type": ds_meta.robot_type})
+            observed = obs
+            if box_style:
+                top = obs[camera].clone()
+                for j, item in enumerate(items):
+                    box = labels[str(int(item["episode_index"]))]["boxes"][color]
+                    if box is not None:  # a cube the detector missed is left unmarked
+                        cube_boxes.draw_chw(top[j], box, box_style)
+                observed = {**obs, camera: top}
+            batch = pre({**observed, "task": [config["tasks"][color]] * len(items), "robot_type": ds_meta.robot_type})
             chunk = policy.predict_action_chunk(batch, noise=noise.to(args.device))
             chunks[color] = post(chunk).float().cpu().numpy()[:, :args.horizon]
         for j, item in enumerate(items):
@@ -89,7 +106,8 @@ def main():
         print(f"{min(start + args.batch_size, len(indices))}/{len(indices)} кадров", flush=True)
 
     print(f"\nПолитика: {args.policy}\nЭпизоды: {episodes}, кадр каждые {stride / fps:.2f} с, горизонт {args.horizon}\n"
-          f"Средняя |предсказание - запись| по суставам; строка — цвет в эпизоде, столбец — цвет в команде.")
+          f"Средняя |предсказание - запись| по суставам; строка — цвет в эпизоде, столбец — цвет в команде"
+          + (" (слово и рамка на кубике этого цвета)." if box_style else "."))
     print(f"{'':>8} {'кадров':>6} " + " ".join(f"{c:>8}" for c in colors) + f" {'сдвиг':>8}")
     summary = {}
     for color in colors:

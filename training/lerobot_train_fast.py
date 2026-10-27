@@ -9,8 +9,17 @@
 2. No epoch boundaries. lerobot_train re-iterates the DataLoader after every epoch, which restarts all workers and
    reopens every video; with 64 workers that stalled training ~30 s per epoch. A sampler that yields fresh random
    permutations back to back keeps the workers running; every epoch is still a new permutation of the dataset.
+With TARGET_BOX=1 in the environment (train.py --target-box) the target cube's box from meta/cube_boxes.json is also
+drawn on every top frame of its episode, right after decoding and before augmentation, so a shifted or rotated frame
+moves the box with the cube. Each checkpoint then gets target_box.json with the drawing style, which tells
+run_policy.py and eval_offline.py to draw the same box.
 Arguments are those of lerobot.scripts.lerobot_train; train.py starts this script instead of it.
 """
+
+import json
+import os
+from pathlib import Path
+import sys
 
 import torch
 
@@ -18,8 +27,28 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.smolvla.modeling_smolvla import resize_with_pad
 from lerobot.scripts import lerobot_train
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference"))
+import cube_boxes  # noqa: E402
+
 SIZE = (512, 512)  # SmolVLAConfig.resize_imgs_with_padding of smolvla_base
+TARGET_BOX = os.environ.get("TARGET_BOX") == "1"
 original_getitem = LeRobotDataset.__getitem__
+original_query_videos = LeRobotDataset._query_videos
+original_save_checkpoint = lerobot_train.save_checkpoint
+
+
+def query_videos(self, query_timestamps, ep_idx):
+    item = original_query_videos(self, query_timestamps, ep_idx)
+    if not hasattr(self, "_target_boxes"):
+        labels = json.loads((self.root / "meta" / "cube_boxes.json").read_text())["episodes"]
+        self._target_boxes = {int(ep): label["boxes"][label["target"]] for ep, label in labels.items()}
+    cube_boxes.draw_chw(item[cube_boxes.STYLE["camera"]], self._target_boxes[ep_idx])
+    return item
+
+
+def save_checkpoint(checkpoint_dir, *args, **kwargs):
+    original_save_checkpoint(checkpoint_dir, *args, **kwargs)
+    (Path(checkpoint_dir) / "pretrained_model" / "target_box.json").write_text(json.dumps(cube_boxes.STYLE, indent=1))
 
 
 def getitem(self, idx):
@@ -52,6 +81,9 @@ class DataLoader(torch.utils.data.DataLoader):
 
 LeRobotDataset.__getitem__ = getitem
 torch.utils.data.DataLoader = DataLoader  # lerobot_train looks it up as torch.utils.data.DataLoader at call time
+if TARGET_BOX:
+    LeRobotDataset._query_videos = query_videos
+    lerobot_train.save_checkpoint = save_checkpoint  # imported into lerobot_train's namespace, called from there
 
 if __name__ == "__main__":
     lerobot_train.main()

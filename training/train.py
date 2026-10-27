@@ -110,6 +110,9 @@ def main():
     parser.add_argument("--full-finetune", action="store_true",
                         help="Обучать и VLM с энкодером изображений, а не только action expert")
     parser.add_argument("--no-augment", action="store_true", help="Без аугментации изображений")
+    parser.add_argument("--target-box", action="store_true",
+                        help="Рисовать рамку целевого кубика на верхней камере (нужен meta/cube_boxes.json, "
+                             "см. training/label_boxes.py)")
     parser.add_argument("--video-backend", default="pyav", help="pyav или torchcodec (нужен системный FFmpeg)")
     parser.add_argument("--device", default="cuda")
     # lerobot_train creates its Accelerator without mixed_precision, so accelerate takes it from the environment.
@@ -138,17 +141,22 @@ def main():
         if args.resume:
             if not (output_dir / "checkpoints" / "last").exists():
                 raise ValueError(f"Нет чекпойнта для продолжения: {output_dir / 'checkpoints' / 'last'}")
+            # A run trained with boxes keeps drawing them; the checkpoint says so.
+            args.target_box |= (output_dir / "checkpoints" / "last" / "pretrained_model" / "target_box.json").is_file()
         else:
             if not (Path(config["dataset_root"]) / "meta" / "info.json").is_file():
                 raise ValueError(f"Нет датасета: {config['dataset_root']}. См. training/fetch_dataset.sh")
             if output_dir.exists():
                 raise ValueError(f"Папка запуска уже существует: {output_dir}. Укажи другой --run-name или --resume")
+            if args.target_box and not (Path(config["dataset_root"]) / "meta" / "cube_boxes.json").is_file():
+                raise ValueError("Нет meta/cube_boxes.json: сначала python training/label_boxes.py")
         output_dir.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         if args.gpu is not None:
             env["CUDA_VISIBLE_DEVICES"] = args.gpu
         env["ACCELERATE_MIXED_PRECISION"] = "bf16" if args.precision == "bf16" else "no"
+        env["TARGET_BOX"] = "1" if args.target_box else "0"
         # Relative paths inside lerobot (outputs/, caches) resolve against the project root.
         return subprocess.call(command, env=env, cwd=PROJECT)
     except (OSError, ValueError, KeyError, TypeError) as exc:

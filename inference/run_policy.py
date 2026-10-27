@@ -5,10 +5,14 @@ Observations are normalized with our dataset statistics. Every command is clippe
 seen in our demonstrations and to `--max-step` per frame. When the run ends, after Ctrl+C or an error,
 the follower folds back to `rest_pose` from config.json (`--no-rest` skips it; a second Ctrl+C drops
 torque at once), then torque is disabled. A side-by-side top/wrist video of the run is saved under camera_check/.
+
+A policy trained with target boxes (target_box.json next to its weights) gets the same box: before the arm
+moves, the cube of the commanded colour is found on the top camera and its box is drawn on every top frame.
 """
 
 import argparse
 import functools
+import json
 from pathlib import Path
 import sys
 import time
@@ -33,10 +37,28 @@ from lerobot.utils.utils import get_safe_torch_device
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 from record import PROJECT, load_config, positive_int  # noqa: E402
 from rest import fold_to_rest  # noqa: E402
+import cube_boxes  # noqa: E402  (inference/ is the script's own directory)
 
 # Our camera keys -> the keys smolvla_base was pretrained with (camera1 = top, camera2 = wrist).
 RENAME = {"observation.images.top": "observation.images.camera1",
           "observation.images.wrist": "observation.images.camera2"}
+
+
+def target_box_style(policy_path):
+    """Drawing style if the policy was trained with target boxes, else None."""
+    path = Path(policy_path) / "target_box.json"
+    return json.loads(path.read_text()) if path.is_file() else None
+
+
+def find_target(top_rgb, color):
+    if top_rgb.shape[:2] != (720, 1280):
+        raise RuntimeError(f"Target boxes are tuned for a 1280x720 top camera, got {top_rgb.shape[1]}x{top_rgb.shape[0]}")
+    boxes = cube_boxes.detect(top_rgb)
+    if boxes[color] is None:
+        raise RuntimeError(f"No {color} cube found on the top camera; nothing to mark as the target")
+    found = ", ".join(f"{c} {b}" for c, b in boxes.items() if b is not None)
+    print(f"Target box: {color} {boxes[color]} (found: {found})", flush=True)
+    return boxes[color]
 
 
 def load_policy(path, device, n_action_steps, ds_meta):
@@ -109,8 +131,11 @@ def main():
         robot.bus.enable_torque = functools.partial(robot.bus.enable_torque, num_retry=3)
     policy, pre, post = load_policy(args.policy, args.device, args.n_action_steps, ds_meta)
     device = get_safe_torch_device(args.device)
+    box_style, box = target_box_style(args.policy), None
 
     def act(obs):
+        if box is not None:
+            cube_boxes.draw_rgb(obs["top"], box, box_style)
         frame = build_dataset_frame(ds_meta.features, obs, prefix=OBS_STR)
         raw = make_robot_action(predict_action(frame, policy, device, pre, post, use_amp=False, task=task,
                                                robot_type=ds_meta.robot_type), ds_meta.features)
@@ -120,6 +145,8 @@ def main():
 
     if args.dry_run:
         obs = dataset_observation(ds_meta, config["dataset_root"], episode=1, offset_s=3)
+        if box_style:
+            box = find_target(obs["top"], args.color)
         start = time.perf_counter()
         action, values, clipped = act(obs)
         print(f"Dry run: one inference {time.perf_counter() - start:.2f}s, {clipped} joints clipped.\n"
@@ -142,6 +169,8 @@ def main():
         robot.bus.sync_write("Goal_Position", robot.bus.sync_read("Present_Position"))
         robot.bus.disconnect(disable_torque=False)
         robot.connect(calibrate=False)
+        if box_style:  # the arm holds its pose; the box is found once, before it moves, as in the recordings
+            box = find_target(robot.get_observation()["top"], args.color)
         print(f"Policy controls the arm for {args.seconds} s (max {args.max_step} units/frame). Ctrl+C stops.",
               flush=True)
         start = time.perf_counter()
