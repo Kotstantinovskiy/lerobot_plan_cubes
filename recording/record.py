@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record one color per session using the installed LeRobot recorder."""
+"""Record one color per session using the installed LeRobot recorder, with the videos encoded live (live_video.py)."""
 
 import argparse
 import importlib.util
@@ -64,7 +64,7 @@ def build_command(config, color, episodes, resume):
         "play_sounds": config.get("play_sounds", False),
         "resume": resume,
     })
-    command = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
+    command = [sys.executable, str(PROJECT / "recording" / "live_video.py")]
     for key, value in options.items():
         encoded = json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
         command.append(f"--{key}={encoded}")
