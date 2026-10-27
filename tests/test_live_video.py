@@ -1,8 +1,11 @@
-"""LiveVideoDataset against LeRobot's stock dataset on the same frames; no camera or arm is opened."""
+"""LiveVideoDataset against LeRobot's stock dataset on the same frames, and the recorder's wait; no camera or arm is
+opened."""
 
 from pathlib import Path
 import sys
+import statistics
 import tempfile
+import time
 import unittest
 
 import numpy as np
@@ -10,7 +13,7 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
-from live_video import LiveVideoDataset  # noqa: E402
+from live_video import LiveVideoDataset, precise_sleep  # noqa: E402
 
 # Wider than 300 px, so the statistics sample every 2nd pixel as they do on the real cameras.
 FEATURES = {
@@ -83,6 +86,18 @@ class LiveVideoTests(unittest.TestCase):
             stock = record(new(LeRobotDataset, Path(tmp, "stock")), [retry])
             live = record(new(LiveVideoDataset, Path(tmp, "live")), [attempt(30, 0, keep=False), retry])
         self.assert_same_files(stock, live)
+
+
+class WaitTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "the recorder's wait is replaced on macOS only")
+    def test_wait_ends_on_time(self):
+        late = []
+        for _ in range(20):
+            deadline = time.perf_counter() + 0.03
+            precise_sleep(0.03)
+            late.append(time.perf_counter() - deadline)
+        self.assertGreaterEqual(min(late), 0)
+        self.assertLess(statistics.median(late), 0.001)  # time.sleep wakes 4-8 ms late here
 
 
 if __name__ == "__main__":

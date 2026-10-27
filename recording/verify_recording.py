@@ -13,7 +13,7 @@ import sys
 import time
 from unittest.mock import patch
 
-from live_video import LiveVideoDataset
+from live_video import RECORDER_PATCHES
 from record import PROJECT, build_command, load_config, positive_int
 from lerobot.scripts import lerobot_record as recorder
 
@@ -76,7 +76,7 @@ def main():
             stack.enter_context(patch.object(recorder, "make_robot_from_config", read_only_robot))
             stack.enter_context(patch.object(recorder, "make_teleoperator_from_config", read_only_leader))
         stack.enter_context(patch.object(recorder, "record_loop", measured_loop))
-        stack.enter_context(patch.object(recorder, "LeRobotDataset", LiveVideoDataset))  # as record.py runs it
+        stack.enter_context(patch.multiple(recorder, **RECORDER_PATCHES))  # as record.py runs it
         # Keyboard input is deliberately disabled for this timed diagnostic.
         stack.enter_context(patch.object(recorder, "init_keyboard_listener", return_value=(None, {
             "stop_recording": False, "exit_early": False, "rerecord_episode": False})))

@@ -11,14 +11,20 @@ statistics read only every n-th pixel of each PNG, so just those pixels are stil
 A discarded attempt (left arrow) leaves nothing behind. The stock recorder keeps the attempt's PNGs and encodes a
 shorter retry with the attempt's extra frames at the end of its video.
 
+On macOS the recorder also waits out each step on a timer the system does not delay (precise_sleep below), so the
+20 frames a second the dataset declares are 20 frames a second of real time, not the stock recorder's 18.7.
+
 record.py runs this script with the recorder's own arguments.
 """
 
 from pathlib import Path
 import queue
+import select
 import shutil
+import sys
 import tempfile
 import threading
+import time
 
 import av
 import numpy as np
@@ -125,8 +131,33 @@ class LiveVideoDataset(LeRobotDataset):
         super().finalize()
 
 
+NOTE_NSECONDS = 0x4  # EVFILT_TIMER flags from macOS <sys/event.h>
+NOTE_CRITICAL = 0x20
+
+
+def precise_sleep(seconds):
+    """Waits on a kqueue timer flagged critical, which macOS fires on time instead of coalescing it with others.
+
+    LeRobot's precise_sleep sleeps until 3 ms before the deadline and spins from there, but macOS wakes a sleeping
+    thread up to 5 ms late, 10 ms while the keyboard and mouse are idle: the recorder's 50 ms steps took 53.4 ms on
+    average. With this timer they take 50.1 ms.
+    """
+    deadline = time.perf_counter() + seconds
+    while (remaining := deadline - time.perf_counter()) > 0:
+        timer = select.kevent(0, select.KQ_FILTER_TIMER, select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                              NOTE_NSECONDS | NOTE_CRITICAL, int(remaining * 1e9))
+        select.kqueue().control([timer], 1)
+
+
+# The names the recorder looks up when it runs that this script replaces.
+RECORDER_PATCHES = {"LeRobotDataset": LiveVideoDataset}
+if sys.platform == "darwin":  # elsewhere LeRobot's wait is time.sleep, which is on time there
+    RECORDER_PATCHES["precise_sleep"] = precise_sleep
+
+
 def main():
-    recorder.LeRobotDataset = LiveVideoDataset
+    for name, value in RECORDER_PATCHES.items():
+        setattr(recorder, name, value)
     recorder.main()
 
 
