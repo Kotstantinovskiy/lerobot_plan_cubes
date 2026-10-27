@@ -158,8 +158,17 @@ def main():
                 raise ValueError(f"Нет датасета: {config['dataset_root']}. См. training/fetch_dataset.sh")
             if output_dir.exists():
                 raise ValueError(f"Папка запуска уже существует: {output_dir}. Укажи другой --run-name или --resume")
-            if args.target_box and not (Path(config["dataset_root"]) / "meta" / "cube_boxes.json").is_file():
-                raise ValueError("Нет meta/cube_boxes.json: сначала python training/label_boxes.py")
+            if args.target_box:
+                meta = Path(config["dataset_root"]) / "meta"
+                if not (meta / "cube_boxes.json").is_file():
+                    raise ValueError("Нет meta/cube_boxes.json: сначала python training/label_boxes.py")
+                # Labels made before episodes were added miss them, and training would stop at the first one.
+                labelled = {int(ep) for ep in json.loads((meta / "cube_boxes.json").read_text())["episodes"]}
+                total = json.loads((meta / "info.json").read_text())["total_episodes"]
+                missing = sorted(set(args.episodes or range(total)) - labelled)
+                if missing:
+                    raise ValueError(f"В meta/cube_boxes.json нет эпизодов {', '.join(map(str, missing))}: "
+                                     "заново python training/label_boxes.py")
         output_dir.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")

@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Download a dataset archive from Google Drive, check its SHA-256 and unpack it into data/color_cubes_wrist1080.
-#   bash training/fetch_dataset.sh [ep40|pilot20]   (default ep40)
+#   bash training/fetch_dataset.sh [ep48|ep40|pilot20]   (default ep48)
 # The Drive folder must be shared as "anyone with the link". gdown lists at most 50 files per folder, so the
-# 62 parts of ep40 sit in two subfolders; parts are found recursively and joined in name order.
+# 73 parts of ep48 and the 62 of ep40 sit in two subfolders; parts are found recursively and joined in name order.
 # A different dataset already in the target (e.g. the 20-episode pilot) is moved to data/color_cubes_wrist1080_<N>ep.
 # Parts already in WORK are reused, so an interrupted download can be finished by running this again.
 set -euo pipefail
 
-PRESET="${1:-ep40}"
+PRESET="${1:-ep48}"
 case "$PRESET" in
+    ep48)
+        DEFAULT_URL=https://drive.google.com/drive/folders/1CKQFklWspc674p4F4v-mjotlabGUON-3
+        NAME=color_cubes_wrist1080_48ep.zip
+        PARTS=73
+        EPISODES=48
+        SHA256=196db3cef0e01e8e1593c00583eb723b8d6fd2572eb8faac26e43f5c94075033
+        ;;
     ep40)
         DEFAULT_URL=https://drive.google.com/drive/folders/17Dh6FnDNPUPyLdmQSvEOm5X-lgMPtiX3
         NAME=color_cubes_wrist1080_40ep.zip
@@ -23,7 +30,7 @@ case "$PRESET" in
         EPISODES=20
         SHA256=92dea7f290bdb5d8185e18ccaa32e742a959b638aacf4181a22b812a6e7235ca
         ;;
-    *) echo "Неизвестный набор: $PRESET (есть ep40, pilot20)" >&2; exit 2 ;;
+    *) echo "Неизвестный набор: $PRESET (есть ep48, ep40, pilot20)" >&2; exit 2 ;;
 esac
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
