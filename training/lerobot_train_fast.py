@@ -16,9 +16,11 @@ run_policy.py and eval_offline.py to draw the same box.
 With TOP_CROP=1 (train.py --top-crop) the top frame is cropped to the left part of the table (inference/top_crop.py),
 after the box and before augmentation, and each checkpoint gets top_crop.json so the arm and eval_offline.py crop alike.
 The augmentation type "LightingGradient" (uneven light, see below) is added to LeRobot's ColorJitter/RandomAffine/....
+The wrist camera gets only the photometric transforms (see COLOR_ONLY_CAMERAS); LeRobot applies one set to every camera.
 Arguments are those of lerobot.scripts.lerobot_train; train.py starts this script instead of it.
 """
 
+import dataclasses
 import json
 import math
 import os
@@ -39,6 +41,10 @@ import top_crop  # noqa: E402
 SIZE = (512, 512)  # SmolVLAConfig.resize_imgs_with_padding of smolvla_base
 TARGET_BOX = os.environ.get("TARGET_BOX") == "1"
 TOP_CROP = os.environ.get("TOP_CROP") == "1"
+# The wrist camera is fixed to the gripper: rotating or shifting its frame moves the fingers relative to the cube, which
+# never happens on the arm. As in openpi (pi0), it gets only the transforms that change colour and light.
+COLOR_ONLY_CAMERAS = {"observation.images.wrist"}
+GEOMETRIC = {"RandomAffine"}
 original_getitem = LeRobotDataset.__getitem__
 original_query_videos = LeRobotDataset._query_videos
 original_save_checkpoint = lerobot_train.save_checkpoint
@@ -89,9 +95,27 @@ def save_checkpoint(checkpoint_dir, *args, **kwargs):
         (model_dir / "top_crop.json").write_text(json.dumps(top_crop.CROP, indent=1))
 
 
+def camera_transforms(self, image_transforms, key):
+    """The dataset's image transforms for one camera, without the geometric ones on COLOR_ONLY_CAMERAS."""
+    if key not in COLOR_ONLY_CAMERAS:
+        return image_transforms
+    if not hasattr(self, "_color_transforms"):
+        cfg = image_transforms._cfg
+        self._color_transforms = transforms.ImageTransforms(dataclasses.replace(
+            cfg, tfs={name: tf for name, tf in cfg.tfs.items() if tf.type not in GEOMETRIC}))
+    return self._color_transforms
+
+
 def getitem(self, idx):
-    item = original_getitem(self, idx)
+    # LeRobot would run self.image_transforms on every camera inside __getitem__; run them here per camera instead.
+    image_transforms, self.image_transforms = self.image_transforms, None
+    try:
+        item = original_getitem(self, idx)
+    finally:
+        self.image_transforms = image_transforms
     for key in self.meta.camera_keys:
+        if image_transforms is not None:
+            item[key] = camera_transforms(self, image_transforms, key)(item[key])
         item[key] = resize_with_pad(item[key][None], *SIZE, pad_value=0)[0]
     return item
 

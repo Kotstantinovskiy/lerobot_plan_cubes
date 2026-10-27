@@ -29,7 +29,8 @@ RENAME = {"observation.images.top": "observation.images.camera1",
 # Sharpness: 0.3 s per sample on our 1080p+720p frames (8x the rest together), which starved the GPU.
 # Brightness and contrast are wider than LeRobot's ±0.2 and uneven light is added (LightingGradient, defined in
 # lerobot_train_fast.py): all demonstrations were recorded in the evening with a lamp on the left, while the arm also
-# runs in daylight. As in LeRobot, each frame gets a random 3 of these.
+# runs in daylight. As in LeRobot, each frame gets a random 3 of these; the wrist camera, fixed to the gripper, never
+# gets "affine" (lerobot_train_fast.py), so it draws 3 of the other 4.
 IMAGE_TRANSFORMS = {
     "brightness": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"brightness": [0.5, 1.5]}},
     "contrast": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"contrast": [0.6, 1.4]}},
