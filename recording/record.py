@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Record one color per session using the installed LeRobot recorder, with the videos encoded live (live_video.py)."""
+"""Record cube colors using the installed LeRobot recorder, with the videos encoded live (live_video.py).
+
+One color per session, or several taking turns episode by episode (--color blue,yellow,red,green).
+"""
 
 import argparse
 import importlib.util
@@ -11,6 +14,7 @@ import subprocess
 import sys
 
 PROJECT = Path(__file__).resolve().parents[1]
+TASK_CYCLE = "--task_cycle="  # live_video.py's argument: the colors and their tasks in turn, as JSON [[color, task]]
 
 
 def load_config(path=PROJECT / "config.json"):
@@ -38,9 +42,9 @@ def positive_int(value):
     return number
 
 
-def build_command(config, color, episodes, resume):
-    task = config["tasks"][color]
-    if not isinstance(task, str) or not task.strip():
+def build_command(config, colors, episodes, resume):
+    tasks = [config["tasks"][color] for color in colors]
+    if not all(isinstance(task, str) and task.strip() for task in tasks):
         raise ValueError("Для цвета нужна непустая текстовая команда")
     root = Path(config["dataset_root"]).expanduser()
     if not root.is_absolute():
@@ -52,7 +56,7 @@ def build_command(config, color, episodes, resume):
     options.update({
         "dataset.repo_id": config["repo_id"],
         "dataset.root": str(root.resolve()),
-        "dataset.single_task": task,
+        "dataset.single_task": tasks[0],
         "dataset.num_episodes": episodes,
         "dataset.fps": config["fps"],
         "dataset.episode_time_s": config["episode_time_s"],
@@ -68,6 +72,8 @@ def build_command(config, color, episodes, resume):
     for key, value in options.items():
         encoded = json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
         command.append(f"--{key}={encoded}")
+    if len(colors) > 1:
+        command.append(TASK_CYCLE + json.dumps(list(zip(colors, tasks))))
     return command, root.resolve()
 
 
@@ -92,17 +98,22 @@ def validate_hardware(config, require_cameras=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=PROJECT / "config.json")
-    parser.add_argument("--color", required=True, help="Ключ цвета из tasks в config.json")
+    parser.add_argument("--color", required=True,
+                        help="Ключ цвета из tasks в config.json; несколько через запятую идут по очереди, по эпизоду")
     parser.add_argument("--episodes", type=positive_int, default=5)
     parser.add_argument("--resume", action="store_true", help="Добавить эпизоды в существующий датасет")
     parser.add_argument("--dry-run", action="store_true", help="Показать команду без подключения устройств")
     args = parser.parse_args()
     try:
         config = load_config(args.config)
-        if args.color not in config["tasks"]:
+        colors = args.color.split(",")
+        if not set(colors) <= set(config["tasks"]):
             raise ValueError(f"Доступные цвета: {', '.join(config['tasks'])}")
-        command, root = build_command(config, args.color, args.episodes, args.resume)
-        print(f"Задание: {config['tasks'][args.color]}", flush=True)
+        command, root = build_command(config, colors, args.episodes, args.resume)
+        if len(colors) > 1:
+            print(f"Цвета по очереди, по одному на эпизод: {', '.join(colors)}", flush=True)
+        for color in dict.fromkeys(colors):
+            print(f"Задание: {config['tasks'][color]}", flush=True)
         print(f"Датасет: {root}", flush=True)
         if args.dry_run:
             print(shlex.join(command))

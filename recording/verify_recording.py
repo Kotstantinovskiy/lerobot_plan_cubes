@@ -33,7 +33,7 @@ def main():
     task = ("Diagnostic teleoperated capture." if args.teleop
             else "Diagnostic stationary capture. No motor commands.")
     config["tasks"] = {"diagnostic": f"{task} Not training data."}
-    command, _ = build_command(config, "diagnostic", args.episodes, False)
+    command, _ = build_command(config, ["diagnostic"], args.episodes, False)
     make_robot = recorder.make_robot_from_config
     make_leader = recorder.make_teleoperator_from_config
     record_loop = recorder.record_loop

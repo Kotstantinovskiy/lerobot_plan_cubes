@@ -1,19 +1,22 @@
-"""LiveVideoDataset against LeRobot's stock dataset on the same frames, and the recorder's wait; no camera or arm is
-opened."""
+"""LiveVideoDataset against LeRobot's stock dataset on the same frames, the recorder's wait and the color cycle; no
+camera or arm is opened."""
 
 from pathlib import Path
 import sys
 import statistics
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.scripts import lerobot_record as recorder
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
-from live_video import LiveVideoDataset, precise_sleep  # noqa: E402
+from live_video import LiveVideoDataset, TaskCycle, precise_sleep  # noqa: E402
 
 # Wider than 300 px, so the statistics sample every 2nd pixel as they do on the real cameras.
 FEATURES = {
@@ -98,6 +101,59 @@ class WaitTests(unittest.TestCase):
             late.append(time.perf_counter() - deadline)
         self.assertGreaterEqual(min(late), 0)
         self.assertLess(statistics.median(late), 0.001)  # time.sleep wakes 4-8 ms late here
+
+
+COLORS = ["blue", "yellow", "red", "green"]
+
+
+def session(episodes, first, discarded=()):
+    """Calls the cycle's wrappers in the order lerobot_record.record calls the recorder's names.
+
+    discarded: attempts (counted from 0) ended with the left arrow. Returns the spoken cues and each attempt's task.
+    """
+    cues, tasks = [], []
+    events = {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
+
+    def record_loop(dataset=None, single_task=None, **_):
+        if dataset is not None:
+            events["rerecord_episode"] = len(tasks) in discarded
+            tasks.append(single_task)
+
+    with patch.multiple(recorder, record_loop=record_loop, log_say=lambda text, *_: cues.append(text),
+                        init_keyboard_listener=lambda: (None, events)):
+        wrapped = TaskCycle([[color, f"Pick up the {color} cube."] for color in COLORS]).patches()
+    dataset = SimpleNamespace(num_episodes=first)
+    wrapped["init_keyboard_listener"]()
+    recorded = 0
+    while recorded < episodes:
+        wrapped["log_say"](f"Recording episode {dataset.num_episodes}", True)
+        wrapped["record_loop"](dataset=dataset, single_task="the session's task")
+        if recorded < episodes - 1 or events["rerecord_episode"]:
+            wrapped["log_say"]("Reset the environment", True)
+            wrapped["record_loop"](single_task="the session's task")
+        if events["rerecord_episode"]:
+            wrapped["log_say"]("Re-record episode", True)
+            events["rerecord_episode"] = False
+            continue
+        dataset.num_episodes += 1
+        recorded += 1
+    return cues, tasks
+
+
+class TaskCycleTests(unittest.TestCase):
+    def test_colors_take_turns(self):
+        cues, tasks = session(8, first=40)
+        self.assertEqual(tasks, [f"Pick up the {color} cube." for color in COLORS * 2])
+        self.assertEqual(cues[:4], ["Recording episode 40, blue", "Reset the environment. Next: yellow",
+                                    "Recording episode 41, yellow", "Reset the environment. Next: red"])
+        self.assertEqual(cues[-1], "Recording episode 47, green")
+
+    def test_discarded_attempt_keeps_its_color(self):
+        cues, tasks = session(3, first=0, discarded={1})
+        self.assertEqual(tasks, ["Pick up the blue cube.", "Pick up the yellow cube.", "Pick up the yellow cube.",
+                                 "Pick up the red cube."])
+        self.assertEqual(cues[2:6], ["Recording episode 1, yellow", "Reset the environment. Next: yellow",
+                                     "Re-record episode", "Recording episode 1, yellow"])
 
 
 if __name__ == "__main__":

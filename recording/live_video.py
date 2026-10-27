@@ -14,10 +14,13 @@ shorter retry with the attempt's extra frames at the end of its video.
 On macOS the recorder also waits out each step on a timer the system does not delay (precise_sleep below), so the
 20 frames a second the dataset declares are 20 frames a second of real time, not the stock recorder's 18.7.
 
+With several colors (record.py --color blue,yellow,...) the episodes take the colors' tasks in turn (TaskCycle).
+
 record.py runs this script with the recorder's own arguments.
 """
 
 from pathlib import Path
+import json
 import queue
 import select
 import shutil
@@ -32,6 +35,8 @@ import numpy as np
 from lerobot.datasets.compute_stats import auto_downsample_height_width
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.scripts import lerobot_record as recorder
+
+from record import TASK_CYCLE
 
 
 class VideoStream:
@@ -155,8 +160,58 @@ if sys.platform == "darwin":  # elsewhere LeRobot's wait is time.sleep, which is
     RECORDER_PATCHES["precise_sleep"] = precise_sleep
 
 
+class TaskCycle:
+    """Gives the session's episodes the colors' tasks in turn and names each episode's color in the spoken cues.
+
+    The recorder takes one task per session. An episode's place in the cycle is its number counted from the session's
+    first episode, so an attempt discarded with the left arrow is recorded again with the same color.
+    """
+
+    def __init__(self, colors_and_tasks):
+        self.colors = [color for color, _ in colors_and_tasks]
+        self.tasks = [task for _, task in colors_and_tasks]
+        self.first = None  # number of the session's first episode
+        self.current = None  # number of the episode announced last
+        self.events = {}  # the recorder's key flags
+
+    def place(self, number):
+        if self.first is None:
+            self.first = number
+        return (number - self.first) % len(self.tasks)
+
+    def patches(self):
+        """Wrappers of the recorder's own names that hand each episode its task and add the color to the cues."""
+        record_loop, log_say, listen = recorder.record_loop, recorder.log_say, recorder.init_keyboard_listener
+
+        def init_keyboard_listener():
+            listener, self.events = listen()
+            return listener, self.events
+
+        def say(text, *args, **kwargs):
+            if text.startswith("Recording episode "):
+                self.current = int(text.split()[-1])
+                text += f", {self.colors[self.place(self.current)]}"
+            elif text == "Reset the environment" and self.current is not None:
+                upcoming = self.current if self.events.get("rerecord_episode") else self.current + 1
+                text += f". Next: {self.colors[self.place(upcoming)]}"
+            return log_say(text, *args, **kwargs)
+
+        def episode_loop(*args, **kwargs):
+            dataset = kwargs.get("dataset")
+            if dataset is not None:  # an episode, not the reset after it
+                kwargs["single_task"] = self.tasks[self.place(dataset.num_episodes)]
+            return record_loop(*args, **kwargs)
+
+        return {"init_keyboard_listener": init_keyboard_listener, "log_say": say, "record_loop": episode_loop}
+
+
 def main():
-    for name, value in RECORDER_PATCHES.items():
+    cycle = [arg.removeprefix(TASK_CYCLE) for arg in sys.argv if arg.startswith(TASK_CYCLE)]
+    sys.argv = [arg for arg in sys.argv if not arg.startswith(TASK_CYCLE)]
+    patches = dict(RECORDER_PATCHES)
+    if cycle:
+        patches.update(TaskCycle(json.loads(cycle[-1])).patches())
+    for name, value in patches.items():
         setattr(recorder, name, value)
     recorder.main()
 
