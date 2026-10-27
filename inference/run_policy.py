@@ -10,9 +10,17 @@ A policy trained with target boxes (target_box.json next to its weights) gets th
 moves, the cube of the commanded colour is found on the top camera and its box is drawn on every top frame.
 A policy trained on the cropped top view (top_crop.json) gets the same crop; the video keeps the full frame with the
 crop outlined in grey.
+
+By default a chunk is computed when the previous one has run out (`--n-action-steps` actions), and the arm stands
+still for the ~1.2 s that takes on a Mac. With `--replan K` the next chunk is computed in the background once K actions
+of the current one have run, from the observation at that moment; when it is ready, the actions for the steps that
+passed meanwhile are dropped and the arm switches to it without stopping. Replanning starts once the arm has moved
+from its starting pose: the demonstrations keep 3.5 s of stillness before the first motion, so from a still arm the
+policy plans ~2 s of waiting before it moves, and replanning from still frames would only ever run the wait.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import json
 from pathlib import Path
@@ -23,16 +31,16 @@ import av
 import cv2
 import draccus
 import numpy as np
+import torch
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.datasets.utils import build_dataset_frame
 from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.utils import make_robot_action
+from lerobot.policies.utils import prepare_observation_for_inference
 from lerobot.robots import RobotConfig, make_robot_from_config, so_follower  # noqa: F401
 from lerobot.utils.constants import OBS_STR
-from lerobot.utils.control_utils import predict_action
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import get_safe_torch_device
 
@@ -110,7 +118,10 @@ def main():
     parser.add_argument("--seconds", type=positive_int, default=20)
     # 2.0 stalled the elbow against gravity (the per-frame position error was too small to move it).
     parser.add_argument("--max-step", type=float, default=5.0, help="Max change per frame per joint (normalized units)")
-    parser.add_argument("--n-action-steps", type=positive_int, default=50)
+    parser.add_argument("--n-action-steps", type=positive_int, default=50,
+                        help="Actions run from each chunk before the next one (without --replan)")
+    parser.add_argument("--replan", type=positive_int,
+                        help="Compute the next chunk in the background after this many actions of the current one")
     parser.add_argument("--device", default="mps")
     parser.add_argument("--dry-run", action="store_true", help="Run one inference on a recorded frame; no robot")
     parser.add_argument("--no-rest", action="store_true", help="Leave the arm where the run ends instead of folding it")
@@ -130,8 +141,10 @@ def main():
         if set(robot.calibration) != set(robot.bus.motors):
             raise RuntimeError(f"Missing or incomplete follower calibration: {robot.calibration_fpath}")
         # Torque_Enable occasionally gets no status packet right after the cameras start (seen on ids 4 and 6);
-        # rewriting it is idempotent, so allow a few retries instead of aborting the connection.
+        # rewriting it is idempotent, so allow a few retries instead of aborting the connection. The first
+        # Present_Position read after connecting fails the same way now and then.
         robot.bus.enable_torque = functools.partial(robot.bus.enable_torque, num_retry=3)
+        robot.bus.sync_read = functools.partial(robot.bus.sync_read, num_retry=3)
     policy, pre, post = load_policy(args.policy, args.device, args.n_action_steps, ds_meta)
     device = get_safe_torch_device(args.device)
     box_style, box = target_box_style(args.policy), None
@@ -139,25 +152,31 @@ def main():
     if crop:
         print(f"Top camera cropped to {crop['box']} (x0, y0, x1, y1)", flush=True)
 
-    def act(obs):
+    def observe(obs):
+        """Model input from a robot observation; the box is drawn in place, so the video shows it too."""
         if box is not None:
             cube_boxes.draw_rgb(obs["top"], box, box_style)
-        seen = obs if crop is None else {**obs, "top": np.ascontiguousarray(top_crop.crop_hwc(obs["top"], crop))}
-        frame = build_dataset_frame(ds_meta.features, seen, prefix=OBS_STR)
-        raw = make_robot_action(predict_action(frame, policy, device, pre, post, use_amp=False, task=task,
-                                               robot_type=ds_meta.robot_type), ds_meta.features)
-        values = np.array([raw[n] for n in names], dtype=float)
-        clipped = np.clip(values, low, high)
-        return dict(zip(names, clipped.tolist())), values, int((clipped != values).sum())
+        seen = obs if crop is None else {**obs, "top": top_crop.crop_hwc(obs["top"], crop)}
+        # Copies: with --replan the frame is read by the background inference while the loop draws on the next one.
+        seen = {k: np.array(v) if isinstance(v, np.ndarray) else v for k, v in seen.items()}
+        return build_dataset_frame(ds_meta.features, seen, prefix=OBS_STR)
+
+    def plan(frame):
+        """The whole action chunk for a frame (chunk_size x joints, dataset units) and the seconds it took."""
+        start = time.perf_counter()
+        with torch.inference_mode():
+            batch = pre(prepare_observation_for_inference(dict(frame), device, task, ds_meta.robot_type))
+            chunk = post(policy.predict_action_chunk(batch))
+        return chunk[0].float().cpu().numpy().astype(float), time.perf_counter() - start
 
     if args.dry_run:
         obs = dataset_observation(ds_meta, config["dataset_root"], episode=1, offset_s=3)
         if box_style:
             box = find_target(obs["top"], args.color)
-        start = time.perf_counter()
-        action, values, clipped = act(obs)
-        print(f"Dry run: one inference {time.perf_counter() - start:.2f}s, {clipped} joints clipped.\n"
-              f"  state  {np.round([obs[n] for n in names], 1).tolist()}\n  action {np.round(values, 1).tolist()}",
+        chunk, infer = plan(observe(obs))
+        clipped = int((np.clip(chunk[0], low, high) != chunk[0]).sum())
+        print(f"Dry run: one inference {infer:.2f}s, {clipped} joints clipped.\n"
+              f"  state  {np.round([obs[n] for n in names], 1).tolist()}\n  action {np.round(chunk[0], 1).tolist()}",
               flush=True)
         return
 
@@ -165,7 +184,8 @@ def main():
     container = av.open(str(video_path), mode="w")
     stream = container.add_stream("libx264", rate=ds_meta.fps, options={"crf": "28"})
     stream.width, stream.height, stream.pix_fmt = 1280, 360, "yuv420p"
-    stats = {"steps": 0, "chunks": 0, "max_infer_s": 0.0, "clipped_steps": 0, "late_steps": 0}
+    stats = {"steps": 0, "chunks": 0, "max_infer_s": 0.0, "clipped_steps": 0, "late_steps": 0, "dropped_actions": 0}
+    background = ThreadPoolExecutor(max_workers=1) if args.replan else None
     try:
         # With torque still off: check calibration and replace any stale goal, so enabling torque cannot jump.
         robot.bus.connect()
@@ -178,20 +198,44 @@ def main():
         robot.connect(calibrate=False)
         if box_style:  # the arm holds its pose; the box is found once, before it moves, as in the recordings
             box = find_target(robot.get_observation()["top"], args.color)
-        print(f"Policy controls the arm for {args.seconds} s (max {args.max_step} units/frame). Ctrl+C stops.",
-              flush=True)
+        replanning = (f"next chunk in the background after {args.replan} actions" if args.replan
+                      else f"{args.n_action_steps} actions per chunk")
+        print(f"Policy controls the arm for {args.seconds} s (max {args.max_step} units/frame, {replanning}). "
+              f"Ctrl+C stops.", flush=True)
+        queue, ran, pending = [], 0, None  # actions left, steps since the chunk's observation, (job, its step)
+        first_pose, moved = None, False
         start = time.perf_counter()
         while time.perf_counter() - start < args.seconds:
             tick = time.perf_counter()
             obs = robot.get_observation()
-            infer_start = time.perf_counter()
-            action, _, clipped = act(obs)
-            infer = time.perf_counter() - infer_start
-            robot.send_action(action)
+            pose = np.array([obs[n] for n in names])
+            first_pose = pose if first_pose is None else first_pose
+            moved = moved or np.abs(pose - first_pose).max() > 3  # the motion threshold of recording/trim_start.py
+            frame = observe(obs)
+            chunk = None
+            if pending is not None and (pending[0].done() or not queue):  # waits only if the current chunk ran out
+                (chunk, infer), taken_at = pending[0].result(), pending[1]
+                pending = None
+                # The actions for the steps run since its observation are stale; the last one is kept in any case.
+                ran = min(stats["steps"] - taken_at, len(chunk) - 1)
+                chunk = chunk[ran:]
+                stats["dropped_actions"] += ran
+            elif not queue:  # every chunk without --replan, and with it until the arm has moved
+                chunk, infer = plan(frame)
+                ran = 0
+                chunk = chunk[:args.n_action_steps]
+            if chunk is not None:
+                queue = list(chunk)
+                stats["chunks"] += 1
+                stats["max_infer_s"] = max(stats["max_infer_s"], infer)
+            if args.replan and moved and pending is None and ran >= args.replan:
+                pending = (background.submit(plan, frame), stats["steps"])
+            values = queue.pop(0)
+            ran += 1
+            clipped = np.clip(values, low, high)
+            robot.send_action(dict(zip(names, clipped.tolist())))
             stats["steps"] += 1
-            stats["clipped_steps"] += clipped > 0
-            stats["max_infer_s"] = max(stats["max_infer_s"], infer)
-            stats["chunks"] += infer > 0.1
+            stats["clipped_steps"] += bool((clipped != values).any())
             if crop is not None:  # after act(): only the video shows the outline
                 x0, y0, x1, y1 = crop["box"]
                 cv2.rectangle(obs["top"], (x0, y0), (x1 - 1, y1 - 1), (128, 128, 128), 2)
@@ -222,6 +266,8 @@ def main():
         for packet in stream.encode():
             container.mux(packet)
         container.close()
+        if background is not None:
+            background.shutdown(cancel_futures=True)
         print(f"Summary: {stats}\nVideo: {video_path}", flush=True)
 
 
