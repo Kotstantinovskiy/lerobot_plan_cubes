@@ -27,10 +27,14 @@ RENAME = {"observation.images.top": "observation.images.camera1",
 
 # LeRobot default augmentation minus two transforms. Hue: a ±0.05 shift moves red towards orange/yellow.
 # Sharpness: 0.3 s per sample on our 1080p+720p frames (8x the rest together), which starved the GPU.
+# Brightness and contrast are wider than LeRobot's ±0.2 and uneven light is added (LightingGradient, defined in
+# lerobot_train_fast.py): all demonstrations were recorded in the evening with a lamp on the left, while the arm also
+# runs in daylight. As in LeRobot, each frame gets a random 3 of these.
 IMAGE_TRANSFORMS = {
-    "brightness": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"brightness": [0.8, 1.2]}},
-    "contrast": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"contrast": [0.8, 1.2]}},
+    "brightness": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"brightness": [0.5, 1.5]}},
+    "contrast": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"contrast": [0.6, 1.4]}},
     "saturation": {"weight": 1.0, "type": "ColorJitter", "kwargs": {"saturation": [0.5, 1.5]}},
+    "lighting": {"weight": 1.0, "type": "LightingGradient", "kwargs": {"gain": [0.6, 1.4]}},
     "affine": {"weight": 1.0, "type": "RandomAffine", "kwargs": {"degrees": [-5.0, 5.0], "translate": [0.05, 0.05]}},
 }
 
@@ -113,6 +117,9 @@ def main():
     parser.add_argument("--target-box", action="store_true",
                         help="Рисовать рамку целевого кубика на верхней камере (нужен meta/cube_boxes.json, "
                              "см. training/label_boxes.py)")
+    parser.add_argument("--top-crop", action="store_true",
+                        help="Обрезать верхнюю камеру до левой части стола без ведущей руки и руки оператора "
+                             "(inference/top_crop.py)")
     parser.add_argument("--video-backend", default="pyav", help="pyav или torchcodec (нужен системный FFmpeg)")
     parser.add_argument("--device", default="cuda")
     # lerobot_train creates its Accelerator without mixed_precision, so accelerate takes it from the environment.
@@ -141,8 +148,10 @@ def main():
         if args.resume:
             if not (output_dir / "checkpoints" / "last").exists():
                 raise ValueError(f"Нет чекпойнта для продолжения: {output_dir / 'checkpoints' / 'last'}")
-            # A run trained with boxes keeps drawing them; the checkpoint says so.
-            args.target_box |= (output_dir / "checkpoints" / "last" / "pretrained_model" / "target_box.json").is_file()
+            # A run trained with boxes or the crop keeps them; the checkpoint says so.
+            last = output_dir / "checkpoints" / "last" / "pretrained_model"
+            args.target_box |= (last / "target_box.json").is_file()
+            args.top_crop |= (last / "top_crop.json").is_file()
         else:
             if not (Path(config["dataset_root"]) / "meta" / "info.json").is_file():
                 raise ValueError(f"Нет датасета: {config['dataset_root']}. См. training/fetch_dataset.sh")
@@ -157,6 +166,7 @@ def main():
             env["CUDA_VISIBLE_DEVICES"] = args.gpu
         env["ACCELERATE_MIXED_PRECISION"] = "bf16" if args.precision == "bf16" else "no"
         env["TARGET_BOX"] = "1" if args.target_box else "0"
+        env["TOP_CROP"] = "1" if args.top_crop else "0"
         # Relative paths inside lerobot (outputs/, caches) resolve against the project root.
         return subprocess.call(command, env=env, cwd=PROJECT)
     except (OSError, ValueError, KeyError, TypeError) as exc:

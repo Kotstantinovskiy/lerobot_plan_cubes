@@ -8,6 +8,8 @@ torque at once), then torque is disabled. A side-by-side top/wrist video of the 
 
 A policy trained with target boxes (target_box.json next to its weights) gets the same box: before the arm
 moves, the cube of the commanded colour is found on the top camera and its box is drawn on every top frame.
+A policy trained on the cropped top view (top_crop.json) gets the same crop; the video keeps the full frame with the
+crop outlined in grey.
 """
 
 import argparse
@@ -38,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 from record import PROJECT, load_config, positive_int  # noqa: E402
 from rest import fold_to_rest  # noqa: E402
 import cube_boxes  # noqa: E402  (inference/ is the script's own directory)
+import top_crop  # noqa: E402
 
 # Our camera keys -> the keys smolvla_base was pretrained with (camera1 = top, camera2 = wrist).
 RENAME = {"observation.images.top": "observation.images.camera1",
@@ -132,11 +135,15 @@ def main():
     policy, pre, post = load_policy(args.policy, args.device, args.n_action_steps, ds_meta)
     device = get_safe_torch_device(args.device)
     box_style, box = target_box_style(args.policy), None
+    crop = top_crop.load(args.policy)
+    if crop:
+        print(f"Top camera cropped to {crop['box']} (x0, y0, x1, y1)", flush=True)
 
     def act(obs):
         if box is not None:
             cube_boxes.draw_rgb(obs["top"], box, box_style)
-        frame = build_dataset_frame(ds_meta.features, obs, prefix=OBS_STR)
+        seen = obs if crop is None else {**obs, "top": np.ascontiguousarray(top_crop.crop_hwc(obs["top"], crop))}
+        frame = build_dataset_frame(ds_meta.features, seen, prefix=OBS_STR)
         raw = make_robot_action(predict_action(frame, policy, device, pre, post, use_amp=False, task=task,
                                                robot_type=ds_meta.robot_type), ds_meta.features)
         values = np.array([raw[n] for n in names], dtype=float)
@@ -185,6 +192,9 @@ def main():
             stats["clipped_steps"] += clipped > 0
             stats["max_infer_s"] = max(stats["max_infer_s"], infer)
             stats["chunks"] += infer > 0.1
+            if crop is not None:  # after act(): only the video shows the outline
+                x0, y0, x1, y1 = crop["box"]
+                cv2.rectangle(obs["top"], (x0, y0), (x1 - 1, y1 - 1), (128, 128, 128), 2)
             side = np.hstack([cv2.resize(obs[k], (640, 360), interpolation=cv2.INTER_AREA) for k in ("top", "wrist")])
             for packet in stream.encode(av.VideoFrame.from_ndarray(side, format="rgb24")):
                 container.mux(packet)

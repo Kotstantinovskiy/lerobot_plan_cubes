@@ -9,7 +9,8 @@ colour word changes, the policy ignores the colour in the command.
 
 For a policy trained with target boxes (target_box.json in its folder) a command of a colour also draws the box
 around that colour's cube, taken from the dataset's meta/cube_boxes.json: a wrong colour points the box at another
-cube, so the table shows whether the policy follows the box and the word.
+cube, so the table shows whether the policy follows the box and the word. A policy trained on the cropped top view
+(top_crop.json) gets the same crop, after the box.
 
 Episodes the policy was trained on only show how well it fitted them; hold some out (train.py --episodes) to see
 generalisation. The policy is loaded exactly as inference/run_policy.py loads it on the robot.
@@ -27,6 +28,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetad
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference"))
 import cube_boxes  # noqa: E402
+import top_crop  # noqa: E402
 from run_policy import PROJECT, load_config, load_policy, positive_int, target_box_style  # noqa: E402
 
 
@@ -66,6 +68,7 @@ def main():
     if box_style:
         labels = json.loads((Path(root) / "meta" / "cube_boxes.json").read_text())["episodes"]
         camera = box_style["camera"]
+    crop = top_crop.load(args.policy)
 
     episodes = args.episodes if args.episodes is not None else list(range(ds_meta.total_episodes))
     stride = max(1, round(args.every_s * fps))
@@ -90,6 +93,8 @@ def main():
                     if box is not None:  # a cube the detector missed is left unmarked
                         cube_boxes.draw_chw(top[j], box, box_style)
                 observed = {**obs, camera: top}
+            if crop:
+                observed = {**observed, crop["camera"]: top_crop.crop_chw(observed[crop["camera"]], crop).contiguous()}
             batch = pre({**observed, "task": [config["tasks"][color]] * len(items), "robot_type": ds_meta.robot_type})
             chunk = policy.predict_action_chunk(batch, noise=noise.to(args.device))
             chunks[color] = post(chunk).float().cpu().numpy()[:, :args.horizon]
