@@ -1,0 +1,41 @@
+{
+ "color": "blue",
+ "target_box": [
+  609,
+  455,
+  650,
+  496
+ ],
+ "stats": {
+  "steps": 564,
+  "chunks": 37,
+  "max_infer_s": 1.2516947500407696,
+  "clipped_steps": 278,
+  "late_steps": 1,
+  "dropped_actions": 541
+ },
+ "seams": {
+  "count": 36,
+  "median": 0.37477874755859375,
+  "p90": 2.770613670349121,
+  "max": 5.667137145996094
+ },
+ "video": "runs/policy-run-20261103-192503-blue.mp4",
+ "args": {
+  "config": "config.json",
+  "policy": "outputs/train/smolvla-ep88-box-crop_020000/pretrained_model",
+  "color": "blue",
+  "seconds": 30,
+  "max_step": 10.0,
+  "n_action_steps": 50,
+  "replan": 10,
+  "rtc": true,
+  "rtc_horizon": 20,
+  "rtc_weight": 10.0,
+  "device": "mps",
+  "dry_run": false,
+  "no_rest": false,
+  "wait": true,
+  "summary": "runs/series-20261103-191936/trial-02-blue.json"
+ }
+}

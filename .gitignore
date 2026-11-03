@@ -22,6 +22,10 @@ config.local.json
 !/data/color_cubes_vga/videos/
 !/data/color_cubes_vga/videos/**
 
+# Videos of policy runs on the arm (Git LFS) and the results of trial series.
+!/runs/
+!/runs/**
+
 # Training runs and local caches.
 outputs/
 .DS_Store

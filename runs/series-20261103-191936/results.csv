@@ -1,0 +1,13 @@
+trial,layout,color,outcome,target_box,seam_median,seam_p90,steps,video
+1,1,red,placed,"[513, 413, 548, 459]",0.3,2.6,562,runs/policy-run-20261103-192133-red.mp4
+2,1,blue,placed,"[609, 455, 650, 496]",0.4,2.8,564,runs/policy-run-20261103-192503-blue.mp4
+3,1,green,missed,"[522, 495, 566, 540]",1.4,2.6,561,runs/policy-run-20261103-192613-green.mp4
+4,1,yellow,missed,"[687, 417, 736, 466]",2.1,3.7,559,runs/policy-run-20261103-192743-yellow.mp4
+5,2,blue,missed,"[646, 433, 693, 480]",2.3,4.3,565,runs/policy-run-20261103-192856-blue.mp4
+6,2,green,placed,"[488, 414, 529, 456]",0.4,2.6,562,runs/policy-run-20261103-193033-green.mp4
+7,2,yellow,placed,"[585, 466, 634, 512]",0.3,2.3,564,runs/policy-run-20261103-193156-yellow.mp4
+8,2,red,missed,"[515, 479, 550, 525]",1.5,4.0,563,runs/policy-run-20261103-193305-red.mp4
+9,3,green,placed,"[470, 413, 518, 458]",0.4,2.9,564,runs/policy-run-20261103-193422-green.mp4
+10,3,yellow,placed,"[511, 462, 555, 506]",0.3,3.6,564,runs/policy-run-20261103-193644-yellow.mp4
+11,3,red,placed,"[512, 430, 548, 477]",0.4,2.3,563,runs/policy-run-20261103-193758-red.mp4
+12,3,blue,placed,"[652, 450, 691, 489]",0.4,3.5,563,runs/policy-run-20261103-193917-blue.mp4
