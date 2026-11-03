@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Download a dataset archive from Google Drive, check its SHA-256 and unpack it into data/color_cubes_wrist1080.
-#   bash training/fetch_dataset.sh [ep88|ep68|ep48|ep40|pilot20]   (default ep88)
+#   bash training/fetch_dataset.sh [ep108|ep88|ep68|ep48|ep40|pilot20]   (default ep108)
 # The Drive folder must be shared as "anyone with the link". gdown lists at most 50 files per folder, so the
 # parts of ep88 and ep68 sit in three subfolders and those of ep48 and ep40 in two; parts are found recursively and
 # joined in name order.
+# ep108 holds only what episodes 88-107 added to ep88 (their data and video files and the whole meta/): ep88 is
+# fetched first, or kept if it is already in place, and ep108 is unpacked over it.
 # A different dataset already in the target (e.g. the 20-episode pilot) is moved to data/color_cubes_wrist1080_<N>ep.
 # Parts already in WORK are reused, so an interrupted download can be finished by running this again.
 set -euo pipefail
 
-PRESET="${1:-ep88}"
+PRESET="${1:-ep108}"
+BASE=
 case "$PRESET" in
+    ep108)
+        DEFAULT_URL=https://drive.google.com/drive/folders/1qEmUvTFyYnP3BfyLZwE1oKjqXpCh7NtN
+        NAME=color_cubes_wrist1080_108ep_from88.zip
+        PARTS=31
+        EPISODES=108
+        BASE=ep88
+        SHA256=b1f6085ce53aaae4a18a987947c03177fd9c50fed10f393385082b6e61038d8b
+        ;;
     ep88)
         DEFAULT_URL=https://drive.google.com/drive/folders/179750bQ4Kb8wnSu_vHNq8HCdMWc6PfSo
         NAME=color_cubes_wrist1080_88ep.zip
@@ -45,7 +56,7 @@ case "$PRESET" in
         EPISODES=20
         SHA256=92dea7f290bdb5d8185e18ccaa32e742a959b638aacf4181a22b812a6e7235ca
         ;;
-    *) echo "Неизвестный набор: $PRESET (есть ep88, ep68, ep48, ep40, pilot20)" >&2; exit 2 ;;
+    *) echo "Неизвестный набор: $PRESET (есть ep108, ep88, ep68, ep48, ep40, pilot20)" >&2; exit 2 ;;
 esac
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,12 +65,15 @@ WORK="${WORK:-$PROJECT/data/downloads/$PRESET}"
 TARGET="$PROJECT/data/color_cubes_wrist1080"
 episodes() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['total_episodes'])" "$1/meta/info.json"; }
 
-if [ -e "$TARGET" ]; then
+if [ -e "$TARGET" ] && [ "$(episodes "$TARGET")" -eq "$EPISODES" ]; then
+    echo "Датасет уже есть: $TARGET ($EPISODES эпизодов)" >&2
+    exit 0
+fi
+if [ -n "$BASE" ]; then
+    # The base with its own folder and download directory, whatever FOLDER_URL and WORK say for this archive.
+    env -u FOLDER_URL -u WORK bash "$0" "$BASE"
+elif [ -e "$TARGET" ]; then
     HAVE="$(episodes "$TARGET")"
-    if [ "$HAVE" -eq "$EPISODES" ]; then
-        echo "Датасет уже есть: $TARGET ($HAVE эпизодов)" >&2
-        exit 0
-    fi
     ASIDE="${TARGET}_${HAVE}ep"
     [ ! -e "$ASIDE" ] || { echo "Не могу отложить $TARGET: $ASIDE уже существует" >&2; exit 1; }
     mv "$TARGET" "$ASIDE"
@@ -81,6 +95,8 @@ if command -v sha256sum >/dev/null; then
 else
     echo "$SHA256  $ZIP" | shasum -a 256 -c -
 fi
-unzip -q "$ZIP" 'color_cubes_wrist1080/*' -d "$PROJECT/data"
+unzip -q -o "$ZIP" 'color_cubes_wrist1080/*' -d "$PROJECT/data"
 rm "$ZIP"
+HAVE="$(episodes "$TARGET")"
+[ "$HAVE" -eq "$EPISODES" ] || { echo "В $TARGET после распаковки $HAVE эпизодов, а не $EPISODES" >&2; exit 1; }
 echo "Готово: $TARGET ($(python3 -c "import json,sys; i=json.load(open(sys.argv[1])); print(i['total_episodes'], 'эпизодов,', i['total_frames'], 'кадров')" "$TARGET/meta/info.json"))"
