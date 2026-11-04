@@ -2,8 +2,8 @@
 """Compute action chunks on a GPU machine for inference/run_policy.py --server on the laptop with the arm.
 
 The laptop keeps the robot, the cameras, the target box, the crop and the safety envelope, and sends a frame whenever
-it needs a chunk. The joint envelope comes from this machine's dataset, the one the policy was trained on, so the laptop
-needs neither a checkpoint nor a dataset.
+it needs a chunk. The joint envelope comes from the checkpoint's statistics, those of the data it trained on, so the
+laptop needs neither a checkpoint nor a dataset, and this machine's dataset may have grown since training.
 
 It listens on localhost only, one client at a time; reach it through an SSH tunnel from the laptop:
   ssh -N -L 18765:127.0.0.1:18765 <this machine>
@@ -24,7 +24,15 @@ from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.utils.utils import get_safe_torch_device
 
 from remote_policy import pack, unpack
-from run_policy import PROJECT, compute_chunk, dataset_observation, load_config, load_policy, target_box_style
+from run_policy import (
+    PROJECT,
+    compute_chunk,
+    dataset_observation,
+    load_config,
+    load_policy,
+    saved_stats,
+    target_box_style,
+)
 import top_crop
 
 CHUNK_SIZE = 50  # of both smolvla_base and pi05_base; the laptop decides how much of a chunk it runs
@@ -49,6 +57,7 @@ def main():
                         prefix_attention_schedule=RTCAttentionSchedule.EXP)
     policy, pre, post = load_policy(args.policy, args.device, CHUNK_SIZE, ds_meta, rtc)
     device = get_safe_torch_device(args.device)
+    stats = saved_stats(args.policy) or ds_meta.stats
     info = {
         "type": policy.config.type,
         "policy": args.policy,
@@ -57,9 +66,8 @@ def main():
         "top_crop": top_crop.load(args.policy),
         "features": ds_meta.features,
         "fps": ds_meta.fps,
-        "episodes": ds_meta.total_episodes,
-        "low": ds_meta.stats["action"]["min"].tolist(),
-        "high": ds_meta.stats["action"]["max"].tolist(),
+        "low": stats["action"]["min"].tolist(),
+        "high": stats["action"]["max"].tolist(),
     }
 
     def answer(request):

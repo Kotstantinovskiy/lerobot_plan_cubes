@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Let a SmolVLA or pi0.5 policy drive the follower inside a safety envelope; nothing is added to the dataset.
 
-Observations are normalized with our dataset statistics. Every command is clipped to the joint range
+A trained checkpoint normalizes with the statistics saved in it, those of the data it trained on, whatever dataset lies
+here now; a base policy from the Hub uses our dataset's. Every command is clipped to the joint range
 seen in our demonstrations and to `--max-step` per frame. When the run ends, after Ctrl+C or an error,
 the follower folds back to `rest_pose` from config.json (`--no-rest` skips it; a second Ctrl+C drops
 torque at once), then torque is disabled. A side-by-side top/wrist video of the run is saved under camera_check/.
@@ -44,6 +45,7 @@ import av
 import cv2
 import draccus
 import numpy as np
+from safetensors.numpy import load_file
 import torch
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
@@ -91,6 +93,19 @@ def find_target(top_rgb, color):
     return boxes[color]
 
 
+def saved_stats(policy_path):
+    """The normalization statistics saved in a trained checkpoint ({feature: {stat: array}}), None for a Hub id.
+    A dataset that has grown since training has other ones: 88 and 108 episodes differ by up to 4.8 joint units."""
+    files = sorted(Path(policy_path).glob("policy_preprocessor_step_*_normalizer_processor.safetensors"))
+    if not files:
+        return None
+    stats = {}
+    for key, values in load_file(files[0]).items():
+        feature, stat = key.rsplit(".", 1)
+        stats.setdefault(feature, {})[stat] = values
+    return stats
+
+
 def load_policy(path, device, n_action_steps, ds_meta, rtc=None):
     cfg = PreTrainedConfig.from_pretrained(path)
     cfg.pretrained_path = path
@@ -110,19 +125,20 @@ def load_policy(path, device, n_action_steps, ds_meta, rtc=None):
         raise RuntimeError(f"{cfg.type} has no Real-Time Chunking; it is for flow-matching policies such as SmolVLA")
     policy.eval()
     features = {**policy.config.input_features, **policy.config.output_features}
+    stats = saved_stats(path) or ds_meta.stats
     preprocessor_overrides = {
         "device_processor": {"device": device},
         "rename_observations_processor": {"rename_map": rename},
-        "normalizer_processor": {"stats": ds_meta.stats, "features": features,
+        "normalizer_processor": {"stats": stats, "features": features,
                                  "norm_map": policy.config.normalization_mapping},
     }
     if is_pi05:  # the checkpoint names no tokenizer, training was given one
         preprocessor_overrides["tokenizer_processor"] = {"tokenizer": pi05_inputs.load_tokenizer()}
     pre, post = make_pre_post_processors(
-        policy_cfg=cfg, pretrained_path=path, dataset_stats=ds_meta.stats,
+        policy_cfg=cfg, pretrained_path=path, dataset_stats=stats,
         preprocessor_overrides=preprocessor_overrides,
         postprocessor_overrides={
-            "unnormalizer_processor": {"stats": ds_meta.stats, "features": policy.config.output_features,
+            "unnormalizer_processor": {"stats": stats, "features": policy.config.output_features,
                                        "norm_map": policy.config.normalization_mapping},
         },
     )
@@ -201,15 +217,14 @@ def main():
         ds_meta = None
         features, fps = remote.info["features"], remote.info["fps"]
         low, high = (np.asarray(remote.info[k], dtype=float) for k in ("low", "high"))
-        episodes, policy_name = remote.info["episodes"], f"{remote.info['policy']} at {args.server}"
+        envelope_source, policy_name = "the policy's training data", f"{remote.info['policy']} at {args.server}"
     else:
         ds_meta = LeRobotDatasetMetadata(config["repo_id"], root=config["dataset_root"])
         features, fps = ds_meta.features, ds_meta.fps
         low, high = (np.asarray(ds_meta.stats["action"][k], dtype=float) for k in ("min", "max"))
-        episodes, policy_name = ds_meta.total_episodes, f"{args.policy} on {args.device}"
+        envelope_source, policy_name = f"{ds_meta.total_episodes} episodes", f"{args.policy} on {args.device}"
     names = features["action"]["names"]
-    print(f"Task: {task}\nPolicy: {policy_name}\nJoint envelope from {episodes} "
-          f"episodes: " + ", ".join(f"{n} [{lo:.0f}, {hi:.0f}]" for n, lo, hi in zip(names, low, high)), flush=True)
+    print(f"Task: {task}\nPolicy: {policy_name}\nJoint envelope from {envelope_source}: " + ", ".join(f"{n} [{lo:.0f}, {hi:.0f}]" for n, lo, hi in zip(names, low, high)), flush=True)
     robot = None
     if not args.dry_run:  # build the robot first so configuration errors surface before the slow model load
         fields = dict(config["robot"], max_relative_target=args.max_step)

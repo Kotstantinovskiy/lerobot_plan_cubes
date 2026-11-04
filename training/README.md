@@ -134,19 +134,19 @@ HF_HUB_OFFLINE=1 python inference/run_policy.py --policy outputs/train/smolvla-p
 
 ## Инференс на GPU-машине, рука на ноутбуке
 
-pi0.5 слишком велик для Mac, поэтому чанки считает `inference/policy_server.py` на devbox, а ноутбук оставляет за собой робота, камеры, рамку, обрезку и защитные ограничения. Чекпойнт и датасет на ноутбуке не нужны: ограничения суставов и настройки рамки и обрезки он получает от сервера, из датасета, на котором училась политика. Кадры pi0.5 сжимаются до 224×224 ещё на ноутбуке: 300 КБ вместо 7 МБ.
+pi0.5 слишком велик для Mac, поэтому чанки считает `inference/policy_server.py` на devbox, а ноутбук оставляет за собой робота, камеры, рамку, обрезку и защитные ограничения. Чекпойнт и датасет на ноутбуке не нужны: ограничения суставов и настройки рамки и обрезки он получает от сервера. Нормализация и ограничения берутся из статистики в чекпойнте, поэтому датасет на сервере может быть новее обучающего. Кадры pi0.5 сжимаются до 224×224 ещё на ноутбуке: 300 КБ вместо 7 МБ.
 
-На devbox01 (GPU с 17 ГБ свободной памяти):
+На devbox02 (GPU с 17 ГБ свободной памяти):
 
 ```bash
 tmux new -s pi05server
-CUDA_VISIBLE_DEVICES=1 HF_HUB_OFFLINE=1 ../lerobot_cubes/.venv-pi/bin/python inference/policy_server.py --policy outputs/train/pi05-ep88-box-crop_020000/pretrained_model --rtc
+CUDA_VISIBLE_DEVICES=3 HF_HUB_OFFLINE=1 ../lerobot_cubes/.venv-pi/bin/python inference/policy_server.py --policy outputs/train/pi05-ep88-box-crop/checkpoints/020000/pretrained_model --rtc
 ```
 
 На ноутбуке — туннель в одном окне и проверка без робота на записанном кадре с сервера в другом:
 
 ```bash
-ssh -N -L 18765:127.0.0.1:18765 avi-ix-newbiz-devbox01
+ssh -N -L 18765:127.0.0.1:18765 avi-ix-devbox02
 ```
 
 ```bash
