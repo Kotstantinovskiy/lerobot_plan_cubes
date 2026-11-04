@@ -18,12 +18,14 @@ import time
 
 import torch
 
+import numpy as np
+
 from lerobot.configs.types import RTCAttentionSchedule
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.utils.utils import get_safe_torch_device
 
-from remote_policy import pack, unpack
+from remote_policy import decode_cameras, pack, unpack
 from run_policy import (
     PROJECT,
     compute_chunk,
@@ -38,6 +40,20 @@ import top_crop
 CHUNK_SIZE = 50  # of both smolvla_base and pi05_base; the laptop decides how much of a chunk it runs
 
 
+def warm_up(policy, pre, post, device, ds_meta, with_rtc):
+    """Blank chunks before the first client: the first ones on a fresh process take 2-3 times as long."""
+    frame = {}
+    for key, feature in ds_meta.features.items():
+        if key.startswith("observation."):
+            dtype = np.uint8 if feature["dtype"] in ("image", "video") else np.float32
+            frame[key] = np.zeros(feature["shape"], dtype=dtype)
+    for _ in range(2):
+        _, raw = compute_chunk(policy, pre, post, frame, device, "warm up", ds_meta.robot_type)
+    if with_rtc:
+        compute_chunk(policy, pre, post, frame, device, "warm up", ds_meta.robot_type,
+                      inference_delay=5, prev_chunk_left_over=raw[5:])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--policy", required=True, help="Local pretrained_model folder")
@@ -47,6 +63,7 @@ def main():
     parser.add_argument("--rtc", action="store_true", help="Allow run_policy.py --rtc (Real-Time Chunking)")
     parser.add_argument("--rtc-horizon", type=int, default=20, help="As in run_policy.py")
     parser.add_argument("--rtc-weight", type=float, default=10.0, help="As in run_policy.py")
+    parser.add_argument("--denoise-steps", type=int, help="Instead of the policy's 10: fewer are faster, less exact")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -56,7 +73,10 @@ def main():
         rtc = RTCConfig(enabled=True, execution_horizon=args.rtc_horizon, max_guidance_weight=args.rtc_weight,
                         prefix_attention_schedule=RTCAttentionSchedule.EXP)
     policy, pre, post = load_policy(args.policy, args.device, CHUNK_SIZE, ds_meta, rtc)
+    if args.denoise_steps:
+        policy.config.num_inference_steps = args.denoise_steps
     device = get_safe_torch_device(args.device)
+    warm_up(policy, pre, post, device, ds_meta, args.rtc)
     stats = saved_stats(args.policy) or ds_meta.stats
     info = {
         "type": policy.config.type,
@@ -81,7 +101,8 @@ def main():
         if "prev_chunk_left_over" in request:
             guidance["prev_chunk_left_over"] = torch.from_numpy(request.pop("prev_chunk_left_over")).to(device)
         start = time.perf_counter()
-        chunk, raw = compute_chunk(policy, pre, post, request, device, task, ds_meta.robot_type, **guidance)
+        frame = decode_cameras(request)
+        chunk, raw = compute_chunk(policy, pre, post, frame, device, task, ds_meta.robot_type, **guidance)
         print(f"Chunk in {time.perf_counter() - start:.2f} s{' (guided)' if guidance else ''}", flush=True)
         return pack(chunk=chunk, raw=raw.float().cpu().numpy())
 

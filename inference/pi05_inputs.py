@@ -19,10 +19,16 @@ TOKENIZER_PATH = Path.home() / ".cache" / "openpi" / "big_vision" / "paligemma_t
 
 
 def resize(images: torch.Tensor) -> torch.Tensor:
-    """[B, 3, H, W] float32 in [0, 1] to [B, 3, 224, 224]: aspect ratio kept, black bars centred, as in openpi."""
-    from lerobot.policies.pi05.modeling_pi05 import resize_with_pad_torch  # needs the transformers fork for pi
-
-    return (resize_with_pad_torch(images * 2 - 1, IMAGE_SIZE, IMAGE_SIZE) + 1) / 2
+    """[B, 3, H, W] float32 in [0, 1] to [B, 3, 224, 224]: aspect ratio kept, black bars centred, as in openpi.
+    The numbers of LeRobot's resize_with_pad_torch on [-1, 1] images, without importing its model code, which takes 4 s
+    on a laptop that only sends frames."""
+    height, width = images.shape[-2:]
+    ratio = max(width, height) / IMAGE_SIZE
+    new_height, new_width = int(height / ratio), int(width / ratio)
+    resized = torch.nn.functional.interpolate(images, (new_height, new_width), mode="bilinear", align_corners=False)
+    top, left = (IMAGE_SIZE - new_height) // 2, (IMAGE_SIZE - new_width) // 2
+    bottom, right = IMAGE_SIZE - new_height - top, IMAGE_SIZE - new_width - left
+    return torch.nn.functional.pad(resized, (left, right, top, bottom))
 
 
 def shrink_cameras(frame: dict) -> dict:
