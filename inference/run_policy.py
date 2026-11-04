@@ -24,6 +24,10 @@ With `--rtc` (Real-Time Chunking, for flow-matching policies such as SmolVLA) th
 with what is left of the running one: its actions for the steps that pass while it is computed are held to the running
 chunk's, and the following ones, up to `--rtc-horizon`, blend from those into its own. The run ends with the seams: the
 largest joint change where a background chunk took over.
+
+With `--server HOST:PORT` the chunks come from inference/policy_server.py on a GPU machine, and everything else stays
+here. The joint envelope and the box and crop settings come from the server too, so this machine needs neither a
+checkpoint nor a dataset, and `--policy` and `--device` have no effect.
 """
 
 import argparse
@@ -60,6 +64,7 @@ from record import PROJECT, load_config, positive_int  # noqa: E402
 from rest import fold_to_rest  # noqa: E402
 import cube_boxes  # noqa: E402  (inference/ is the script's own directory)
 import pi05_inputs  # noqa: E402
+from remote_policy import RemotePolicy  # noqa: E402
 import top_crop  # noqa: E402
 
 # Our camera keys -> the keys the base policy was pretrained with, as in training/train.py.
@@ -135,6 +140,16 @@ def resize_cameras_first(pre):
     return resized_pre
 
 
+def compute_chunk(policy, pre, post, frame, device, task, robot_type, **guidance):
+    """The whole action chunk for a frame (chunk_size x joints): in dataset units and as the model gave it (normalized,
+    what RTC compares). `guidance`: RTC's inference_delay and prev_chunk_left_over."""
+    with torch.no_grad():  # not inference_mode: RTC's guidance takes a gradient, which that mode rules out
+        batch = pre(prepare_observation_for_inference(dict(frame), device, task, robot_type))
+        raw = policy.predict_action_chunk(batch, **guidance)
+        chunk = post(raw.clone())
+    return chunk[0].float().cpu().numpy().astype(float), raw[0]
+
+
 def dataset_observation(ds_meta, root, episode, offset_s):
     """A recorded frame in the same format as robot.get_observation(), for --dry-run."""
     dataset = LeRobotDataset(ds_meta.repo_id, root=root, video_backend="pyav")
@@ -167,6 +182,7 @@ def main():
     parser.add_argument("--rtc-weight", type=float, default=10.0,
                         help="Upper bound of the RTC guidance; 10 suits SmolVLA's 10 denoising steps")
     parser.add_argument("--device", default="mps")
+    parser.add_argument("--server", help="HOST:PORT of policy_server.py, to compute chunks there instead of here")
     parser.add_argument("--dry-run", action="store_true", help="Run one inference on a recorded frame; no robot")
     parser.add_argument("--no-rest", action="store_true", help="Leave the arm where the run ends instead of folding it")
     parser.add_argument("--wait", action="store_true",
@@ -178,10 +194,21 @@ def main():
 
     config = load_config(args.config)
     task = config["tasks"][args.color]
-    ds_meta = LeRobotDatasetMetadata(config["repo_id"], root=config["dataset_root"])
-    names = ds_meta.features["action"]["names"]
-    low, high = (np.asarray(ds_meta.stats["action"][k], dtype=float) for k in ("min", "max"))
-    print(f"Task: {task}\nPolicy: {args.policy} on {args.device}\nJoint envelope from {ds_meta.total_episodes} "
+    remote = RemotePolicy(args.server) if args.server else None
+    if remote:
+        if args.rtc and not remote.info["rtc"]:
+            parser.error("--rtc needs policy_server.py started with --rtc")
+        ds_meta = None
+        features, fps = remote.info["features"], remote.info["fps"]
+        low, high = (np.asarray(remote.info[k], dtype=float) for k in ("low", "high"))
+        episodes, policy_name = remote.info["episodes"], f"{remote.info['policy']} at {args.server}"
+    else:
+        ds_meta = LeRobotDatasetMetadata(config["repo_id"], root=config["dataset_root"])
+        features, fps = ds_meta.features, ds_meta.fps
+        low, high = (np.asarray(ds_meta.stats["action"][k], dtype=float) for k in ("min", "max"))
+        episodes, policy_name = ds_meta.total_episodes, f"{args.policy} on {args.device}"
+    names = features["action"]["names"]
+    print(f"Task: {task}\nPolicy: {policy_name}\nJoint envelope from {episodes} "
           f"episodes: " + ", ".join(f"{n} [{lo:.0f}, {hi:.0f}]" for n, lo, hi in zip(names, low, high)), flush=True)
     robot = None
     if not args.dry_run:  # build the robot first so configuration errors surface before the slow model load
@@ -194,12 +221,15 @@ def main():
         # Present_Position read after connecting fails the same way now and then.
         robot.bus.enable_torque = functools.partial(robot.bus.enable_torque, num_retry=3)
         robot.bus.sync_read = functools.partial(robot.bus.sync_read, num_retry=3)
-    rtc = RTCConfig(enabled=True, execution_horizon=args.rtc_horizon, max_guidance_weight=args.rtc_weight,
-                    prefix_attention_schedule=RTCAttentionSchedule.EXP) if args.rtc else None
-    policy, pre, post = load_policy(args.policy, args.device, args.n_action_steps, ds_meta, rtc)
-    device = get_safe_torch_device(args.device)
-    box_style, box = target_box_style(args.policy), None
-    crop = top_crop.load(args.policy)
+    if remote:
+        box_style, crop = remote.info["target_box"], remote.info["top_crop"]
+    else:
+        rtc = RTCConfig(enabled=True, execution_horizon=args.rtc_horizon, max_guidance_weight=args.rtc_weight,
+                        prefix_attention_schedule=RTCAttentionSchedule.EXP) if args.rtc else None
+        policy, pre, post = load_policy(args.policy, args.device, args.n_action_steps, ds_meta, rtc)
+        device = get_safe_torch_device(args.device)
+        box_style, crop = target_box_style(args.policy), top_crop.load(args.policy)
+    box = None
     if crop:
         print(f"Top camera cropped to {crop['box']} (x0, y0, x1, y1)", flush=True)
 
@@ -210,21 +240,23 @@ def main():
         seen = obs if crop is None else {**obs, "top": top_crop.crop_hwc(obs["top"], crop)}
         # Copies: with --replan the frame is read by the background inference while the loop draws on the next one.
         seen = {k: np.array(v) if isinstance(v, np.ndarray) else v for k, v in seen.items()}
-        return build_dataset_frame(ds_meta.features, seen, prefix=OBS_STR)
+        return build_dataset_frame(features, seen, prefix=OBS_STR)
 
     def plan(frame, **guidance):
-        """The whole action chunk for a frame (chunk_size x joints): in dataset units, as the model gave it
-        (normalized, what RTC compares) and the seconds it took. `guidance`: RTC's inference_delay and
-        prev_chunk_left_over."""
+        """compute_chunk's two forms of the action chunk, here or on the server, and the seconds it took."""
+        if remote:
+            return remote.plan(frame, task, **guidance)
         start = time.perf_counter()
-        with torch.no_grad():  # not inference_mode: RTC's guidance takes a gradient, which that mode rules out
-            batch = pre(prepare_observation_for_inference(dict(frame), device, task, ds_meta.robot_type))
-            raw = policy.predict_action_chunk(batch, **guidance)
-            chunk = post(raw.clone())
-        return chunk[0].float().cpu().numpy().astype(float), raw[0], time.perf_counter() - start
+        chunk, raw = compute_chunk(policy, pre, post, frame, device, task, ds_meta.robot_type, **guidance)
+        return chunk, raw, time.perf_counter() - start
+
+    def recorded_observation(offset_s):
+        if remote:
+            return remote.recorded_observation(episode=1, offset_s=offset_s)
+        return dataset_observation(ds_meta, config["dataset_root"], episode=1, offset_s=offset_s)
 
     if args.dry_run:
-        obs = dataset_observation(ds_meta, config["dataset_root"], episode=1, offset_s=3)
+        obs = recorded_observation(3)
         if box_style:
             box = find_target(obs["top"], args.color)
         chunk, _, infer = plan(observe(obs))
@@ -234,11 +266,11 @@ def main():
               flush=True)
         if args.rtc:  # a chunk taking over from another as with --replan: planned `delay` steps on, run from there
             def frame_at(offset_s):
-                return observe(dataset_observation(ds_meta, config["dataset_root"], episode=1, offset_s=offset_s))
+                return observe(recorded_observation(offset_s))
 
             first, first_raw, infer = plan(frame_at(6))  # the arm is moving by then
-            delay = min(math.ceil(infer * ds_meta.fps), len(first) // 2)
-            later = frame_at(6 + delay / ds_meta.fps)
+            delay = min(math.ceil(infer * fps), len(first) // 2)
+            later = frame_at(6 + delay / fps)
             plain = plan(later)[0]
             guided, _, infer = plan(later, inference_delay=delay, prev_chunk_left_over=first_raw[delay:])
             seams = [np.abs(c[delay] - first[2 * delay - 1]).max() for c in (plain, guided)]
@@ -254,7 +286,7 @@ def main():
             return
     video_path = PROJECT / "camera_check" / f"policy-run-{time.strftime('%Y%m%d-%H%M%S')}-{args.color}.mp4"
     container = av.open(str(video_path), mode="w")
-    stream = container.add_stream("libx264", rate=ds_meta.fps, options={"crf": "28"})
+    stream = container.add_stream("libx264", rate=fps, options={"crf": "28"})
     stream.width, stream.height, stream.pix_fmt = 1280, 360, "yuv420p"
     stats = {"steps": 0, "chunks": 0, "max_infer_s": 0.0, "clipped_steps": 0, "late_steps": 0, "dropped_actions": 0}
     seams = []  # largest joint change where a background chunk took over
@@ -310,7 +342,7 @@ def main():
             if args.replan and moved and pending is None and ran >= args.replan:
                 guidance = {}
                 if args.rtc:  # the new chunk's first actions are held to those the arm runs while it is computed
-                    guidance = {"inference_delay": max(delays, default=math.ceil(infer * ds_meta.fps)),
+                    guidance = {"inference_delay": max(delays, default=math.ceil(infer * fps)),
                                 "prev_chunk_left_over": left}
                 pending = (background.submit(plan, frame, **guidance), stats["steps"])
             values = queue.pop(0)
@@ -326,12 +358,12 @@ def main():
             side = np.hstack([cv2.resize(obs[k], (640, 360), interpolation=cv2.INTER_AREA) for k in ("top", "wrist")])
             for packet in stream.encode(av.VideoFrame.from_ndarray(side, format="rgb24")):
                 container.mux(packet)
-            if stats["steps"] % ds_meta.fps == 0:
+            if stats["steps"] % fps == 0:
                 print(f"{time.perf_counter() - start:5.1f}s step {stats['steps']}, new chunks {stats['chunks']}, "
                       f"clipped steps {stats['clipped_steps']}", flush=True)
             elapsed = time.perf_counter() - tick
-            stats["late_steps"] += elapsed > 1 / ds_meta.fps
-            precise_sleep(max(0.0, 1 / ds_meta.fps - elapsed))
+            stats["late_steps"] += elapsed > 1 / fps
+            precise_sleep(max(0.0, 1 / fps - elapsed))
     except KeyboardInterrupt:
         print("Stopped by Ctrl+C.", flush=True)
     finally:
@@ -339,7 +371,7 @@ def main():
             try:
                 if not args.no_rest and all(robot.bus.sync_read("Torque_Enable").values()):
                     print("Folding back to rest; Ctrl+C drops torque at once.", flush=True)
-                    fold_to_rest(robot.bus, config["rest_pose"], ds_meta.fps, log=lambda s: print(s, flush=True))
+                    fold_to_rest(robot.bus, config["rest_pose"], fps, log=lambda s: print(s, flush=True))
             except (Exception, KeyboardInterrupt) as error:
                 print(f"Return to rest stopped: {error!r}", flush=True)
             try:

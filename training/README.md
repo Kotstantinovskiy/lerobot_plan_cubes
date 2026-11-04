@@ -131,3 +131,32 @@ mkdir -p outputs/train/smolvla-pilot20
 scp -r <машина>:<репозиторий>/outputs/train/smolvla-pilot20/checkpoints/020000/pretrained_model outputs/train/smolvla-pilot20/
 HF_HUB_OFFLINE=1 python inference/run_policy.py --policy outputs/train/smolvla-pilot20/pretrained_model --color red --seconds 20
 ```
+
+## Инференс на GPU-машине, рука на ноутбуке
+
+pi0.5 слишком велик для Mac, поэтому чанки считает `inference/policy_server.py` на devbox, а ноутбук оставляет за собой робота, камеры, рамку, обрезку и защитные ограничения. Чекпойнт и датасет на ноутбуке не нужны: ограничения суставов и настройки рамки и обрезки он получает от сервера, из датасета, на котором училась политика. Кадры pi0.5 сжимаются до 224×224 ещё на ноутбуке: 300 КБ вместо 7 МБ.
+
+На devbox01 (GPU с 17 ГБ свободной памяти):
+
+```bash
+tmux new -s pi05server
+CUDA_VISIBLE_DEVICES=1 HF_HUB_OFFLINE=1 ../lerobot_cubes/.venv-pi/bin/python inference/policy_server.py --policy outputs/train/pi05-ep88-box-crop_020000/pretrained_model --rtc
+```
+
+На ноутбуке — туннель в одном окне и проверка без робота на записанном кадре с сервера в другом:
+
+```bash
+ssh -N -L 18765:127.0.0.1:18765 avi-ix-newbiz-devbox01
+```
+
+```bash
+python inference/run_policy.py --server 127.0.0.1:18765 --color red --dry-run --rtc
+```
+
+Запуск на руке — та же команда без `--dry-run`, с параметрами прогона:
+
+```bash
+python inference/run_policy.py --server 127.0.0.1:18765 --color red --seconds 30 --max-step 10 --replan 10 --rtc
+```
+
+Если связь пропала или сервер молчит 30 с, прогон останавливается и рука складывается в исходную позу, как после Ctrl+C. Сервер слушает только localhost и обслуживает одного клиента за раз; сообщения — архивы numpy, поэтому чужой процесс на общей машине может запросить чанк, но не выполнить код.

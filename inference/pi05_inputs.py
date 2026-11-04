@@ -25,6 +25,17 @@ def resize(images: torch.Tensor) -> torch.Tensor:
     return (resize_with_pad_torch(images * 2 - 1, IMAGE_SIZE, IMAGE_SIZE) + 1) / 2
 
 
+def shrink_cameras(frame: dict) -> dict:
+    """A dataset frame with its camera images (HWC uint8) put through resize(), still HWC uint8."""
+    shrunk = dict(frame)
+    for key, image in frame.items():
+        if key.startswith("observation.images."):
+            floats = torch.from_numpy(image).permute(2, 0, 1)[None].float() / 255
+            resized = (resize(floats)[0].permute(1, 2, 0) * 255).round().clamp(0, 255)
+            shrunk[key] = resized.numpy().astype("uint8")
+    return shrunk
+
+
 def load_tokenizer():
     """The PaliGemma tokenizer, downloaded once to TOKENIZER_PATH (4 MB)."""
     from transformers import GemmaTokenizerFast
