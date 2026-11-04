@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Let a SmolVLA policy drive the follower inside a safety envelope; nothing is added to the dataset.
+"""Let a SmolVLA or pi0.5 policy drive the follower inside a safety envelope; nothing is added to the dataset.
 
 Observations are normalized with our dataset statistics. Every command is clipped to the joint range
 seen in our demonstrations and to `--max-step` per frame. When the run ends, after Ctrl+C or an error,
@@ -51,7 +51,7 @@ from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.policies.utils import prepare_observation_for_inference
 from lerobot.robots import RobotConfig, make_robot_from_config, so_follower  # noqa: F401
-from lerobot.utils.constants import OBS_STR
+from lerobot.utils.constants import OBS_IMAGES, OBS_STR
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import get_safe_torch_device
 
@@ -59,11 +59,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 from record import PROJECT, load_config, positive_int  # noqa: E402
 from rest import fold_to_rest  # noqa: E402
 import cube_boxes  # noqa: E402  (inference/ is the script's own directory)
+import pi05_inputs  # noqa: E402
 import top_crop  # noqa: E402
 
-# Our camera keys -> the keys smolvla_base was pretrained with (camera1 = top, camera2 = wrist).
-RENAME = {"observation.images.top": "observation.images.camera1",
+# Our camera keys -> the keys the base policy was pretrained with, as in training/train.py.
+RENAME = {"observation.images.top": "observation.images.camera1",  # SmolVLA: camera1 = top, camera2 = wrist
           "observation.images.wrist": "observation.images.camera2"}
+PI05_RENAME = {"observation.images.top": "observation.images.base_0_rgb",
+               "observation.images.wrist": "observation.images.left_wrist_0_rgb"}
 
 
 def target_box_style(policy_path):
@@ -92,26 +95,44 @@ def load_policy(path, device, n_action_steps, ds_meta, rtc=None):
         cfg.rtc_config = rtc
     if hasattr(cfg, "load_vlm_weights"):
         cfg.load_vlm_weights = False  # the policy checkpoint already holds every VLM weight
-    rename = RENAME if "observation.images.camera1" in cfg.input_features else {}
+    is_pi05 = cfg.type == "pi05"
+    if is_pi05:
+        rename = PI05_RENAME
+    else:
+        rename = RENAME if "observation.images.camera1" in cfg.input_features else {}
     policy = make_policy(cfg, ds_meta=ds_meta, rename_map=rename)
     if rtc is not None and getattr(policy, "rtc_processor", None) is None:
         raise RuntimeError(f"{cfg.type} has no Real-Time Chunking; it is for flow-matching policies such as SmolVLA")
     policy.eval()
     features = {**policy.config.input_features, **policy.config.output_features}
+    preprocessor_overrides = {
+        "device_processor": {"device": device},
+        "rename_observations_processor": {"rename_map": rename},
+        "normalizer_processor": {"stats": ds_meta.stats, "features": features,
+                                 "norm_map": policy.config.normalization_mapping},
+    }
+    if is_pi05:  # the checkpoint names no tokenizer, training was given one
+        preprocessor_overrides["tokenizer_processor"] = {"tokenizer": pi05_inputs.load_tokenizer()}
     pre, post = make_pre_post_processors(
         policy_cfg=cfg, pretrained_path=path, dataset_stats=ds_meta.stats,
-        preprocessor_overrides={
-            "device_processor": {"device": device},
-            "rename_observations_processor": {"rename_map": rename},
-            "normalizer_processor": {"stats": ds_meta.stats, "features": features,
-                                     "norm_map": policy.config.normalization_mapping},
-        },
+        preprocessor_overrides=preprocessor_overrides,
         postprocessor_overrides={
             "unnormalizer_processor": {"stats": ds_meta.stats, "features": policy.config.output_features,
                                        "norm_map": policy.config.normalization_mapping},
         },
     )
+    if is_pi05:
+        pre = resize_cameras_first(pre)
     return policy, pre, post
+
+
+def resize_cameras_first(pre):
+    """pi0.5's preprocessor behind a step that shrinks the camera frames as in training (inference/pi05_inputs.py)."""
+    def resized_pre(observation):
+        frames = {key: pi05_inputs.resize(value) for key, value in observation.items() if key.startswith(OBS_IMAGES)}
+        return pre({**observation, **frames})
+
+    return resized_pre
 
 
 def dataset_observation(ds_meta, root, episode, offset_s):

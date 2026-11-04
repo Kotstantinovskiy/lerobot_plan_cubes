@@ -12,10 +12,13 @@ OUT="$PROJECT/outputs/eval/$RUN"
 mkdir -p "$OUT"
 
 while true; do
+    newest="$(ls "$RUN_DIR/checkpoints" 2>/dev/null | grep -E '^[0-9]+$' | sort | tail -1 || true)"
     for dir in "$RUN_DIR"/checkpoints/[0-9]*; do
         name="$(basename "$dir")"
-        # training_state is written after the weights, so its presence means the checkpoint is (nearly) complete.
-        [ -d "$dir/training_state" ] && [ ! -f "$OUT/$name.txt" ] || continue
+        [ -d "$dir/pretrained_model" ] && [ ! -f "$OUT/$name.txt" ] || continue
+        # training_state is written after the weights, so its presence means the checkpoint is (nearly) complete;
+        # older checkpoints lose it once a newer one is saved (lerobot_train_fast.py).
+        [ -d "$dir/training_state" ] || [ "$name" != "$newest" ] || continue
         sleep 30
         echo "$(date '+%F %T') чекпойнт $name"
         python "$PROJECT/training/eval_offline.py" --policy "$dir/pretrained_model" --output "$OUT/$name.json" "$@" \

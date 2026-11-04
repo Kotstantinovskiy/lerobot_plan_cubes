@@ -5,7 +5,8 @@
    on every camera image is resize_with_pad to 512x512 (bilinear, zero padding). Applying that same function in the
    workers, after augmentation, gives identical inputs: on a 512x512 image it is the identity. A sample then carries
    6 MB of images instead of 36 MB for our 1080p + 720p frames, and the pin-memory thread, which copied 2.3 GB per
-   batch of 64 and held training at ~1.3 s per step, keeps up with the GPU.
+   batch of 64 and held training at ~1.3 s per step, keeps up with the GPU. pi0.5 frames are shrunk to 224x224 as
+   openpi shrinks them, with black bars (inference/pi05_inputs.py).
 2. No epoch boundaries. lerobot_train re-iterates the DataLoader after every epoch, which restarts all workers and
    reopens every video; with 64 workers that stalled training ~30 s per epoch. A sampler that yields fresh random
    permutations back to back keeps the workers running; every epoch is still a new permutation of the dataset.
@@ -17,16 +18,21 @@ With TOP_CROP=1 (train.py --top-crop) the top frame is cropped to the left part 
 after the box and before augmentation, and each checkpoint gets top_crop.json so the arm and eval_offline.py crop alike.
 The augmentation type "LightingGradient" (uneven light, see below) is added to LeRobot's ColorJitter/RandomAffine/....
 The wrist camera gets only the photometric transforms (see COLOR_ONLY_CAMERAS); LeRobot applies one set to every camera.
+With POLICY_TYPE=pi05 (train.py picks it from the base policy) the PaliGemma tokenizer comes from
+inference/pi05_inputs.py, and pi05_base's third camera slot, which we have no camera for, is dropped (see make_policy).
 Arguments are those of lerobot.scripts.lerobot_train; train.py starts this script instead of it.
 """
 
 import dataclasses
+import functools
 import json
 import math
 import os
 from pathlib import Path
+import shutil
 import sys
 
+import accelerate.utils
 import torch
 
 from lerobot.datasets import transforms
@@ -36,9 +42,11 @@ from lerobot.scripts import lerobot_train
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "inference"))
 import cube_boxes  # noqa: E402
+import pi05_inputs  # noqa: E402
 import top_crop  # noqa: E402
 
 SIZE = (512, 512)  # SmolVLAConfig.resize_imgs_with_padding of smolvla_base
+POLICY_TYPE = os.environ.get("POLICY_TYPE", "smolvla")
 TARGET_BOX = os.environ.get("TARGET_BOX") == "1"
 TOP_CROP = os.environ.get("TOP_CROP") == "1"
 # The wrist camera is fixed to the gripper: rotating or shifting its frame moves the fingers relative to the cube, which
@@ -49,6 +57,8 @@ original_getitem = LeRobotDataset.__getitem__
 original_query_videos = LeRobotDataset._query_videos
 original_save_checkpoint = lerobot_train.save_checkpoint
 original_make_transform = transforms.make_transform_from_config
+original_make_policy = lerobot_train.make_policy
+original_make_processors = lerobot_train.make_pre_post_processors
 
 
 class LightingGradient(torch.nn.Module):
@@ -88,11 +98,40 @@ def query_videos(self, query_timestamps, ep_idx):
 
 def save_checkpoint(checkpoint_dir, *args, **kwargs):
     original_save_checkpoint(checkpoint_dir, *args, **kwargs)
+    # Only the newest checkpoint keeps its optimizer state (25 GB for pi0.5): --resume continues from the last one.
+    for state_dir in Path(checkpoint_dir).parent.glob("*/training_state"):
+        if state_dir.parent != Path(checkpoint_dir):
+            shutil.rmtree(state_dir)
     model_dir = Path(checkpoint_dir) / "pretrained_model"
     if TARGET_BOX:
         (model_dir / "target_box.json").write_text(json.dumps(cube_boxes.STYLE, indent=1))
     if TOP_CROP:
         (model_dir / "top_crop.json").write_text(json.dumps(top_crop.CROP, indent=1))
+
+
+def make_policy(cfg, *args, ds_meta=None, rename_map=None, **kwargs):
+    # LeRobot would feed pi05_base's camera slot that the dataset lacks as a masked image. Nothing attends to its 256
+    # tokens and they shift no positions (position ids count unmasked tokens only), so dropping the slot leaves the
+    # outputs as they are, while SigLIP and every layer stop processing a quarter of the sequence.
+    if cfg.type == "pi05":
+        cameras = {(rename_map or {}).get(key, key) for key in ds_meta.camera_keys}
+        for key in [key for key in cfg.image_features if key not in cameras]:
+            del cfg.input_features[key]
+    return original_make_policy(cfg, *args, ds_meta=ds_meta, rename_map=rename_map, **kwargs)
+
+
+def make_pre_post_processors(policy_cfg, *args, **kwargs):
+    if policy_cfg.type == "pi05":
+        overrides = kwargs.setdefault("preprocessor_overrides", {})
+        overrides["tokenizer_processor"] = {"tokenizer": pi05_inputs.load_tokenizer()}
+    return original_make_processors(policy_cfg, *args, **kwargs)
+
+
+def fit_image(image):
+    """A CHW frame in [0, 1] shrunk to the policy's input size."""
+    if POLICY_TYPE == "pi05":
+        return pi05_inputs.resize(image[None])[0]
+    return resize_with_pad(image[None], *SIZE, pad_value=0)[0]
 
 
 def camera_transforms(self, image_transforms, key):
@@ -116,7 +155,7 @@ def getitem(self, idx):
     for key in self.meta.camera_keys:
         if image_transforms is not None:
             item[key] = camera_transforms(self, image_transforms, key)(item[key])
-        item[key] = resize_with_pad(item[key][None], *SIZE, pad_value=0)[0]
+        item[key] = fit_image(item[key])
     return item
 
 
@@ -144,9 +183,16 @@ class DataLoader(torch.utils.data.DataLoader):
 LeRobotDataset.__getitem__ = getitem
 torch.utils.data.DataLoader = DataLoader  # lerobot_train looks it up as torch.utils.data.DataLoader at call time
 transforms.make_transform_from_config = make_transform  # ImageTransforms looks it up in its module at build time
+# These three are imported into lerobot_train's namespace and called from there.
+lerobot_train.make_policy = make_policy
+lerobot_train.make_pre_post_processors = make_pre_post_processors
+lerobot_train.save_checkpoint = save_checkpoint
+# On several GPUs the gradients live in DDP's communication buckets instead of beside a copy of them there (13.5 GB for
+# pi0.5 in fp32). lerobot_train imports this class inside main(), so it gets the patched one.
+accelerate.utils.DistributedDataParallelKwargs = functools.partial(
+    accelerate.utils.DistributedDataParallelKwargs, gradient_as_bucket_view=True)
 if TARGET_BOX or TOP_CROP:
     LeRobotDataset._query_videos = query_videos
-    lerobot_train.save_checkpoint = save_checkpoint  # imported into lerobot_train's namespace, called from there
 
 if __name__ == "__main__":
     lerobot_train.main()

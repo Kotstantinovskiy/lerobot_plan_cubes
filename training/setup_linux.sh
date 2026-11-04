@@ -12,6 +12,15 @@ UV="${UV:-$(command -v uv || echo "$HOME/.local/bin/uv")}"
 
 [ -d "$LEROBOT_DIR/.git" ] || git clone "$LEROBOT_REPO" "$LEROBOT_DIR"
 cd "$LEROBOT_DIR"
+# With the argument "pi": a separate .venv-pi for pi0.5, whose LeRobot code needs a transformers fork in place of the
+# release SmolVLA uses; sentencepiece builds the PaliGemma tokenizer (inference/pi05_inputs.py).
+if [ "${1:-}" = "pi" ]; then
+    [ -x .venv-pi/bin/python ] || "$UV" venv --python 3.12 .venv-pi
+    "$UV" pip install --python .venv-pi/bin/python -e '.[pi]' accelerate sentencepiece protobuf
+    .venv-pi/bin/python -c "import torch, lerobot; print('lerobot', lerobot.__version__, '| torch', torch.__version__, '| CUDA', torch.cuda.is_available())"
+    echo "Окружение: source $LEROBOT_DIR/.venv-pi/bin/activate"
+    exit 0
+fi
 [ -x .venv/bin/python ] || "$UV" venv --python 3.12 .venv
 # gdown fetches the dataset archive from Google Drive (training/fetch_dataset.sh).
 "$UV" pip install --python .venv/bin/python -e '.[smolvla]' gdown

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fine-tune SmolVLA on our dataset with the installed LeRobot trainer (lerobot_train).
+"""Fine-tune SmolVLA or pi0.5 on our dataset with the installed LeRobot trainer (lerobot_train).
 
-Defaults follow the LeRobot SmolVLA fine-tuning recipe (batch 64, 20k steps) with project-specific fixes:
-camera keys are renamed to the ones smolvla_base was pretrained with, image augmentation is on but without
-hue jitter (the task is defined by cube colour) and sharpness jitter (too slow on full-resolution frames),
-and the LR schedule decays over exactly --steps.
+SmolVLA follows the LeRobot fine-tuning recipe (batch 64, 20k steps); pi0.5 trains all its weights as in openpi, in
+fp32 with bf16 autocast like SmolVLA, on batches of 16 for 40k steps (see DEFAULTS). Project-specific fixes for both:
+camera keys are renamed to the ones the base policy was pretrained with, image augmentation is on but without hue
+jitter (the task is defined by cube colour) and sharpness jitter (too slow on full-resolution frames), and the LR
+schedule decays over exactly --steps.
 Runs are written to outputs/train/<run-name>; --resume continues the last checkpoint of that run.
 """
 
@@ -21,9 +22,27 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "recording"))
 from record import PROJECT, load_config, positive_int  # noqa: E402
 
-# Our camera keys -> the keys smolvla_base was pretrained with (camera1 = top, camera2 = wrist).
-RENAME = {"observation.images.top": "observation.images.camera1",
-          "observation.images.wrist": "observation.images.camera2"}
+# Our camera keys -> the keys each base policy was pretrained with.
+RENAME = {
+    # camera1 = top, camera2 = wrist
+    "smolvla": {"observation.images.top": "observation.images.camera1",
+                "observation.images.wrist": "observation.images.camera2"},
+    # As openpi feeds single-arm DROID to pi0.5: base_0_rgb is the outside view, left_wrist_0_rgb the wrist camera.
+    "pi05": {"observation.images.top": "observation.images.base_0_rgb",
+             "observation.images.wrist": "observation.images.left_wrist_0_rgb"},
+}
+# Batch size, steps and checkpoint interval when not given on the command line. pi0.5 in fp32 (weights, gradients and
+# AdamW state: 54 GB) with batches of 16 peaks at 109 GB on an H200 without gradient checkpointing, 0.58 s per step;
+# openpi's batch of 32 would need checkpointing, which costs 60% more time per sample. LeRobot's suggested bf16 weights
+# fit 32, but there AdamW's steps of ~lr are below the rounding step of most weights and are lost. Every pi0.5
+# checkpoint takes 43 GB with the optimizer state.
+DEFAULTS = {
+    "smolvla": {"batch_size": 64, "steps": 20_000, "save_freq": 2_500},
+    "pi05": {"batch_size": 16, "steps": 40_000, "save_freq": 5_000},
+}
+# pi05_base's processors later got steps (relative actions) that our LeRobot 0.4.4 fork does not know; this revision
+# has the same weights and config, with processors it can load.
+REVISIONS = {"lerobot/pi05_base": "a538eb273274eb30f126a118f39dbc0ee212c883"}
 
 # LeRobot default augmentation minus two transforms. Hue: a ±0.05 shift moves red towards orange/yellow.
 # Sharpness: 0.3 s per sample on our 1080p+720p frames (8x the rest together), which starved the GPU.
@@ -54,7 +73,24 @@ def encode(value):
     return json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
 
 
-def build_command(args, config):
+def local_policy(policy):
+    """A pretrained_model folder: the given one, or a Hub id downloaded at its revision from REVISIONS."""
+    if Path(policy).is_dir():
+        return Path(policy)
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(policy, revision=REVISIONS.get(policy)))
+
+
+def policy_type(folder):
+    """"smolvla" or "pi05", from the config.json of a pretrained_model folder."""
+    kind = json.loads((folder / "config.json").read_text())["type"]
+    if kind not in RENAME:
+        raise ValueError(f"{folder}: policy type {kind}, train.py knows {', '.join(RENAME)}")
+    return kind
+
+
+def build_command(args, config, kind):
     output_dir = PROJECT / "outputs" / "train" / args.run_name
     if args.resume:
         train_config = output_dir / "checkpoints" / "last" / "pretrained_model" / "train_config.json"
@@ -64,15 +100,13 @@ def build_command(args, config):
             "policy.path": args.policy,
             "policy.device": args.device,
             "policy.push_to_hub": False,
-            # smolvla_base already holds every VLM weight; true would download SmolVLM2 weights on top.
-            "policy.load_vlm_weights": False,
             "policy.scheduler_decay_steps": args.steps,
             "dataset.repo_id": config["repo_id"],
             "dataset.root": config["dataset_root"],
             "dataset.video_backend": args.video_backend,
             "dataset.image_transforms.enable": not args.no_augment,
             "dataset.image_transforms.tfs": IMAGE_TRANSFORMS,
-            "rename_map": RENAME,
+            "rename_map": RENAME[kind],
             "batch_size": args.batch_size,
             "steps": args.steps,
             "save_freq": args.save_freq,
@@ -83,14 +117,22 @@ def build_command(args, config):
             "job_name": args.run_name,
             "wandb.enable": args.wandb,
         }
+        if kind == "smolvla":
+            # smolvla_base already holds every VLM weight; true would download SmolVLM2 weights on top.
+            options["policy.load_vlm_weights"] = False
         if args.episodes:
             options["dataset.episodes"] = args.episodes
         if args.full_finetune:
             options["policy.train_expert_only"] = False
             options["policy.freeze_vision_encoder"] = False
-    # lerobot_train with faster data loading: frames shrunk to SmolVLA's input size inside the workers (same model
+    # lerobot_train with faster data loading: frames shrunk to the policy's input size inside the workers (same model
     # inputs) and no worker restarts between epochs.
     command = [sys.executable, str(Path(__file__).with_name("lerobot_train_fast.py"))]
+    gpu_count = len(args.gpu.split(",")) if args.gpu else 1
+    if gpu_count > 1:
+        # One process per GPU, each with --batch-size samples: the effective batch is gpu_count * --batch-size.
+        command[1:1] = ["-m", "accelerate.commands.launch", "--multi_gpu", f"--num_processes={gpu_count}",
+                        "--num_machines=1", "--dynamo_backend=no"]
     command += [f"--{key}={encode(value)}" for key, value in options.items()]
     return command + args.extra, output_dir
 
@@ -101,11 +143,12 @@ def main():
     parser.add_argument("--config", type=Path, default=PROJECT / "config.json",
                         help="Берутся repo_id и dataset_root")
     parser.add_argument("--dataset", type=Path, help="Папка датасета вместо dataset_root из конфига")
-    parser.add_argument("--policy", default="lerobot/smolvla_base", help="Hub id или локальная pretrained_model")
-    parser.add_argument("--run-name", default=f"smolvla-{time.strftime('%Y%m%d-%H%M%S')}")
-    parser.add_argument("--steps", type=positive_int, default=20_000)
-    parser.add_argument("--batch-size", type=positive_int, default=64)
-    parser.add_argument("--save-freq", type=positive_int, default=2_500)
+    parser.add_argument("--policy", default="lerobot/smolvla_base",
+                        help="Hub id или локальная pretrained_model: lerobot/smolvla_base или lerobot/pi05_base")
+    parser.add_argument("--run-name", default=f"run-{time.strftime('%Y%m%d-%H%M%S')}")
+    parser.add_argument("--steps", type=positive_int, help="По умолчанию SmolVLA 20000, pi0.5 40000")
+    parser.add_argument("--batch-size", type=positive_int, help="На одну GPU; по умолчанию SmolVLA 64, pi0.5 16")
+    parser.add_argument("--save-freq", type=positive_int, help="Чекпойнт каждые N шагов: SmolVLA 2500, pi0.5 5000")
     parser.add_argument("--log-freq", type=positive_int, default=100)
     # Workers decode and augment full-resolution frames, ~0.1-0.15 s per sample: on devbox01 (H200) 32 of them could
     # not keep up with a 0.32 s bf16 step, 64 leave the GPU waiting 0.02 s per step.
@@ -129,7 +172,7 @@ def main():
     # and the GPU part of a step went from 0.47 to 0.32 s.
     parser.add_argument("--precision", choices=["bf16", "fp32"], default="bf16",
                         help="bf16 — autocast при fp32-весах; fp32 — без autocast")
-    parser.add_argument("--gpu", help="Номер GPU (CUDA_VISIBLE_DEVICES), например 0")
+    parser.add_argument("--gpu", help="Номер GPU (CUDA_VISIBLE_DEVICES), например 0, или несколько: 0,3")
     parser.add_argument("--wandb", action="store_true", help="Логировать в Weights & Biases")
     parser.add_argument("--resume", action="store_true", help="Продолжить --run-name с последнего чекпойнта")
     parser.add_argument("--dry-run", action="store_true", help="Показать команду без запуска")
@@ -139,7 +182,16 @@ def main():
         config = load_config(args.config)
         if args.dataset:
             config["dataset_root"] = str(args.dataset.expanduser().resolve())
-        command, output_dir = build_command(args, config)
+        last = PROJECT / "outputs" / "train" / args.run_name / "checkpoints" / "last" / "pretrained_model"
+        if args.resume and not last.is_dir():
+            raise ValueError(f"Нет чекпойнта для продолжения: {last.parent}")
+        if not args.resume:
+            args.policy = local_policy(args.policy)
+        kind = policy_type(last if args.resume else args.policy)
+        for name, value in DEFAULTS[kind].items():
+            if getattr(args, name) is None:
+                setattr(args, name, value)
+        command, output_dir = build_command(args, config, kind)
         print(f"Датасет: {config['dataset_root']}\nЗапуск: {output_dir}", flush=True)
         if args.dry_run:
             print(shlex.join(command))
@@ -147,10 +199,7 @@ def main():
         if importlib.util.find_spec("lerobot") is None:
             raise ValueError("LeRobot не установлен в этом Python. См. training/README.md")
         if args.resume:
-            if not (output_dir / "checkpoints" / "last").exists():
-                raise ValueError(f"Нет чекпойнта для продолжения: {output_dir / 'checkpoints' / 'last'}")
             # A run trained with boxes or the crop keeps them; the checkpoint says so.
-            last = output_dir / "checkpoints" / "last" / "pretrained_model"
             args.target_box |= (last / "target_box.json").is_file()
             args.top_crop |= (last / "top_crop.json").is_file()
         else:
@@ -177,6 +226,7 @@ def main():
         env["ACCELERATE_MIXED_PRECISION"] = "bf16" if args.precision == "bf16" else "no"
         env["TARGET_BOX"] = "1" if args.target_box else "0"
         env["TOP_CROP"] = "1" if args.top_crop else "0"
+        env["POLICY_TYPE"] = kind
         # Relative paths inside lerobot (outputs/, caches) resolve against the project root.
         return subprocess.call(command, env=env, cwd=PROJECT)
     except (OSError, ValueError, KeyError, TypeError) as exc:
